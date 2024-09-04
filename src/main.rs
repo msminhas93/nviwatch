@@ -1,13 +1,22 @@
-extern crate nvml_wrapper as nvml;
-extern crate prettytable;
 extern crate clap;
 extern crate crossterm;
+extern crate nix;
+extern crate nvml_wrapper as nvml;
+extern crate prettytable;
+extern crate procfs;
 
-use nvml::Nvml;
-use nvml::enum_wrappers::device::TemperatureSensor;
-use prettytable::{Table, Row, Cell, format};
 use clap::{Arg, Command};
-use crossterm::{execute, terminal::{Clear, ClearType}};
+use crossterm::{
+    execute,
+    terminal::{Clear, ClearType},
+};
+use nix::unistd::{Uid, User};
+use nvml::enum_wrappers::device::TemperatureSensor;
+use nvml::struct_wrappers::device::ProcessInfo;
+use nvml::Nvml;
+use prettytable::{format, Cell, Row, Table};
+use procfs::process::Process;
+use std::collections::HashMap;
 use std::error::Error;
 use std::io::stdout;
 use std::thread::sleep;
@@ -21,6 +30,7 @@ struct GpuInfo {
     utilization: u32,
     memory_used: u64,
     memory_total: u64,
+    user_memory: String, // New field for user's aggregate memory usage
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -29,16 +39,20 @@ fn main() -> Result<(), Box<dyn Error>> {
         .version("0.1.0")
         .author("Your Name <your.email@example.com>")
         .about("Displays GPU information in a tabular format")
-        .arg(Arg::new("watch")
-            .short('w')
-            .long("watch")
-            .value_name("MILLISECONDS")
-            .help("Refresh interval in milliseconds")
-            .required(false))
+        .arg(
+            Arg::new("watch")
+                .short('w')
+                .long("watch")
+                .value_name("MILLISECONDS")
+                .help("Refresh interval in milliseconds")
+                .required(false),
+        )
         .get_matches();
 
     // Get the watch interval if specified
-    let watch_interval = matches.get_one::<String>("watch").map(|s| s.parse::<u64>().expect("Invalid number"));
+    let watch_interval = matches
+        .get_one::<String>("watch")
+        .map(|s| s.parse::<u64>().expect("Invalid number"));
 
     // Initialize NVML
     let nvml = Nvml::init()?;
@@ -59,13 +73,38 @@ fn main() -> Result<(), Box<dyn Error>> {
             let utilization = device.utilization_rates()?.gpu;
             let memory = device.memory_info()?;
 
+            // Get the list of processes running on the GPU
+            let processes: Vec<ProcessInfo> = device.running_compute_processes()?;
+
+            // Aggregate memory usage by user
+            let mut user_memory_map: HashMap<String, u64> = HashMap::new();
+            for process in processes {
+                let pid = process.pid;
+                let used_memory = match process.used_gpu_memory {
+                    nvml::enums::device::UsedGpuMemory::Used(bytes) => bytes / 1_048_576, // Convert bytes to MB
+                    nvml::enums::device::UsedGpuMemory::Unavailable => 0,
+                };
+
+                if let Some(username) = get_user_by_pid(pid) {
+                    *user_memory_map.entry(username).or_insert(0) += used_memory;
+                }
+            }
+
+            // Format user memory usage
+            let user_memory: String = user_memory_map
+                .iter()
+                .map(|(user, &mem)| format!("{}({}M)", user, mem))
+                .collect::<Vec<String>>()
+                .join(" ");
+
             gpu_infos.push(GpuInfo {
-                index: index as usize, // Convert u32 to usize
+                index: index as usize,
                 name,
                 temperature,
                 utilization,
                 memory_used: memory.used / 1_048_576, // Convert bytes to MB
                 memory_total: memory.total / 1_048_576, // Convert bytes to MB
+                user_memory,
             });
         }
 
@@ -83,6 +122,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             Cell::new("Temp").style_spec("Fb"),
             Cell::new("Util").style_spec("Fb"),
             Cell::new("Memory").style_spec("Fb"),
+            Cell::new("User Mem").style_spec("Fb"), // New column for user memory
         ]));
 
         // Add GPU information rows
@@ -93,6 +133,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 Cell::new(&format!("{}°C", gpu.temperature)).style_spec("Fr"),
                 Cell::new(&format!("{}%", gpu.utilization)).style_spec("Fc"),
                 Cell::new(&format!("{}/{}MB", gpu.memory_used, gpu.memory_total)).style_spec("Fm"),
+                Cell::new(&gpu.user_memory).style_spec("Fb"), // Display user memory
             ]));
         }
 
@@ -108,4 +149,15 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     Ok(())
+}
+
+fn get_user_by_pid(pid: u32) -> Option<String> {
+    if let Ok(process) = Process::new(pid as i32) {
+        if let Ok(uid) = process.uid() {
+            if let Ok(Some(user)) = User::from_uid(Uid::from_raw(uid)) {
+                return Some(user.name);
+            }
+        }
+    }
+    None
 }
