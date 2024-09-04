@@ -4,6 +4,7 @@ extern crate nix;
 extern crate nvml_wrapper as nvml;
 extern crate prettytable;
 extern crate procfs;
+extern crate textwrap;
 
 use clap::{Arg, Command};
 use crossterm::{
@@ -21,6 +22,7 @@ use std::error::Error;
 use std::io::stdout;
 use std::thread::sleep;
 use std::time::Duration;
+use textwrap::fill;
 
 // Define a struct to hold GPU information
 struct GpuInfo {
@@ -90,12 +92,19 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }
             }
 
+            // Sort users by memory usage in descending order
+            let mut sorted_users: Vec<_> = user_memory_map.iter().collect();
+            sorted_users.sort_by(|a, b| b.1.cmp(a.1));
+
             // Format user memory usage
-            let user_memory: String = user_memory_map
+            let user_memory: String = sorted_users
                 .iter()
                 .map(|(user, &mem)| format!("{}({}M)", user, mem))
                 .collect::<Vec<String>>()
                 .join(" ");
+
+            // Wrap the user memory string to a maximum width of 30 characters
+            let wrapped_user_memory = fill(&user_memory, 30);
 
             gpu_infos.push(GpuInfo {
                 index: index as usize,
@@ -104,7 +113,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 utilization,
                 memory_used: memory.used / 1_048_576, // Convert bytes to MB
                 memory_total: memory.total / 1_048_576, // Convert bytes to MB
-                user_memory,
+                user_memory: wrapped_user_memory,
             });
         }
 
