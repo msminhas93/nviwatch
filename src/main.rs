@@ -1,5 +1,7 @@
 extern crate clap;
 extern crate crossterm;
+extern crate flexi_logger;
+extern crate log;
 extern crate nix;
 extern crate nvml_wrapper as nvml;
 extern crate procfs;
@@ -11,6 +13,8 @@ use crossterm::event::{self, Event, KeyCode};
 use crossterm::execute;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen};
+use flexi_logger::{FileSpec, Logger, WriteMode};
+use log::{debug, info};
 use nix::unistd::{Uid, User};
 use nvml::enum_wrappers::device::TemperatureSensor;
 use nvml::struct_wrappers::device::ProcessInfo;
@@ -25,7 +29,15 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::io::stdout;
 use std::time::{Duration, Instant};
+use textwrap::fill;
+
 fn main() -> Result<(), Box<dyn Error>> {
+    // Initialize the logger to log to a file
+    Logger::try_with_str("debug")?
+        .log_to_file(FileSpec::default()) // Default file specification
+        .write_mode(WriteMode::BufferAndFlush)
+        .start()?;
+
     // Parse command-line arguments
     let matches = Command::new("gpu-info-rs")
         .version("0.1.0")
@@ -49,6 +61,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // Initialize NVML
     let nvml = Nvml::init()?;
+    info!("Initialized NVML");
 
     // Set up terminal interface
     let mut stdout = stdout();
@@ -75,6 +88,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
             // Get the number of available devices
             let device_count = nvml.device_count()?;
+            debug!("Device count: {}", device_count);
 
             // Create a vector to store GPU information
             let mut gpu_infos = Vec::new();
@@ -88,12 +102,41 @@ fn main() -> Result<(), Box<dyn Error>> {
                 let utilization = device.utilization_rates()?.gpu;
                 let memory = device.memory_info()?;
 
-                // Get the list of processes running on the GPU
-                let processes: Vec<ProcessInfo> = device.running_compute_processes()?;
+                debug!(
+                    "Device {}: {} - Temp: {}°C, Util: {}%, Memory: {}/{}MB",
+                    index,
+                    name,
+                    temperature,
+                    utilization,
+                    memory.used / 1_048_576,
+                    memory.total / 1_048_576
+                );
+
+                // Get the list of compute and graphics processes running on the GPU
+                let compute_processes: Vec<ProcessInfo> = device.running_compute_processes()?;
+                debug!(
+                    "Found {} compute processes on device {}",
+                    compute_processes.len(),
+                    index
+                );
+
+                let graphics_processes: Vec<ProcessInfo> = device.running_graphics_processes()?;
+                debug!(
+                    "Found {} graphics processes on device {}",
+                    graphics_processes.len(),
+                    index
+                );
+
+                let all_processes = [compute_processes, graphics_processes].concat();
+                debug!(
+                    "Total processes on device {}: {}",
+                    index,
+                    all_processes.len()
+                );
 
                 // Aggregate memory usage by user
                 let mut user_memory_map: HashMap<String, u64> = HashMap::new();
-                for process in processes {
+                for process in all_processes {
                     let pid = process.pid;
                     let used_memory = match process.used_gpu_memory {
                         nvml::enums::device::UsedGpuMemory::Used(bytes) => bytes / 1_048_576, // Convert bytes to MB
@@ -101,7 +144,13 @@ fn main() -> Result<(), Box<dyn Error>> {
                     };
 
                     if let Some(username) = get_user_by_pid(pid) {
-                        *user_memory_map.entry(username).or_insert(0) += used_memory;
+                        *user_memory_map.entry(username.clone()).or_insert(0) += used_memory;
+                        debug!(
+                            "Process {}: User: {}, Memory: {}MB",
+                            pid, username, used_memory
+                        );
+                    } else {
+                        debug!("Could not get username for process {}", pid);
                     }
                 }
 
@@ -117,7 +166,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     .join(" ");
 
                 // Wrap the user memory string to a maximum width that fits your display
-                let wrapped_user_memory = textwrap::fill(&user_memory, 50); // Adjust width as needed
+                let wrapped_user_memory = fill(&user_memory, 50); // Adjust width as needed
 
                 gpu_infos.push(vec![
                     index.to_string(),
@@ -145,8 +194,23 @@ fn main() -> Result<(), Box<dyn Error>> {
                 let rows: Vec<Row> = gpu_infos
                     .iter()
                     .map(|info| {
-                        let cells: Vec<Cell> = info.iter().map(|c| Cell::from(c.clone())).collect();
-                        Row::new(cells).style(Style::default().fg(Color::White))
+                        let cells: Vec<Cell> = info
+                            .iter()
+                            .enumerate()
+                            .map(|(i, c)| {
+                                let style = match i {
+                                    0 => Style::default().fg(Color::Cyan),    // GPU Index
+                                    1 => Style::default().fg(Color::Green),   // Name
+                                    2 => Style::default().fg(Color::Red),     // Temperature
+                                    3 => Style::default().fg(Color::Magenta), // Utilization
+                                    4 => Style::default().fg(Color::Blue),    // Memory
+                                    5 => Style::default().fg(Color::Yellow),  // User Mem
+                                    _ => Style::default(),
+                                };
+                                Cell::from(c.clone()).style(style)
+                            })
+                            .collect();
+                        Row::new(cells)
                     })
                     .collect();
 
@@ -158,24 +222,38 @@ fn main() -> Result<(), Box<dyn Error>> {
                         Constraint::Length(5),
                         Constraint::Length(5),
                         Constraint::Length(20),
-                        Constraint::Length(100),
+                        Constraint::Length(50), // Increased width for User Mem column
                     ],
                 )
-                .header(
-                    Row::new(vec![
-                        Cell::from("GPU"),
-                        Cell::from("Name"),
-                        Cell::from("Temp"),
-                        Cell::from("Util"),
-                        Cell::from("Memory"),
-                        Cell::from("User Mem"),
-                    ])
-                    .style(
+                .header(Row::new(vec![
+                    Cell::from("GPU").style(
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Cell::from("Name").style(
+                        Style::default()
+                            .fg(Color::Green)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Cell::from("Temp")
+                        .style(Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+                    Cell::from("Util").style(
+                        Style::default()
+                            .fg(Color::Magenta)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Cell::from("Memory").style(
+                        Style::default()
+                            .fg(Color::Blue)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Cell::from("User Mem").style(
                         Style::default()
                             .fg(Color::Yellow)
                             .add_modifier(Modifier::BOLD),
                     ),
-                )
+                ]))
                 .block(Block::default().borders(Borders::ALL));
 
                 f.render_widget(table, chunks[0]);

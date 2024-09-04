@@ -6,6 +6,8 @@ edition = "2021"
 [dependencies]
 clap = "4.5.17"
 crossterm = "0.28.1"
+flexi_logger = "0.29.0"
+log = "0.4.22"
 nix = { version = "0.29.0", features = ["user"] }
 nvml-wrapper = "0.10.0"
 prettytable-rs = "0.10.0"
