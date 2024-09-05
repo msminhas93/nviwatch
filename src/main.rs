@@ -23,15 +23,18 @@ use nvml::struct_wrappers::device::ProcessInfo as NvmlProcessInfo;
 use nvml::Nvml;
 use procfs::process::Process;
 use ratatui::backend::CrosstermBackend;
+use ratatui::layout::Rect;
 use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::widgets::{Block, Borders, Cell, Row, Table};
+use ratatui::text::Span;
+use ratatui::widgets::{Block, Borders, Cell, List, ListItem, Row, Table};
+use ratatui::Frame;
 use ratatui::Terminal;
 use std::collections::HashMap;
 use std::error::Error;
 use std::fs;
 use std::io::stdout;
-use std::time::SystemTime;
+use std::io::Stdout;
 use std::time::{Duration, Instant};
 use textwrap::fill;
 
@@ -110,86 +113,15 @@ fn main() -> Result<(), Box<dyn Error>> {
         if last_update.elapsed() >= Duration::from_millis(watch_interval) {
             last_update = Instant::now();
             gpu_infos = collect_gpu_info(&nvml)?;
-
             terminal.draw(|f| {
-                let size = f.area();
-                let block = Block::default()
-                    .borders(Borders::ALL)
-                    .title("GPU Info (Press 'q' to quit)");
-                f.render_widget(block, size);
-
-                let chunks = Layout::default()
+                let area = f.area();
+                let main_layout = Layout::default()
                     .direction(Direction::Vertical)
-                    .constraints([Constraint::Percentage(100)].as_ref())
-                    .split(size);
+                    .constraints([Constraint::Percentage(60), Constraint::Percentage(40)].as_ref())
+                    .split(area);
 
-                let rows: Vec<Row> = gpu_infos
-                    .iter()
-                    .map(|info| {
-                        let cells = vec![
-                            Cell::from(info.index.to_string())
-                                .style(Style::default().fg(Color::Cyan)),
-                            Cell::from(info.name.as_str()).style(Style::default().fg(Color::Green)),
-                            Cell::from(format!("{}°C", info.temperature))
-                                .style(Style::default().fg(Color::Red)),
-                            Cell::from(format!("{}%", info.utilization))
-                                .style(Style::default().fg(Color::Magenta)),
-                            Cell::from(format!(
-                                "{}/{}MB",
-                                info.memory_used / 1_048_576,
-                                info.memory_total / 1_048_576
-                            ))
-                            .style(Style::default().fg(Color::Blue)),
-                            Cell::from(format_process_info(&info.processes))
-                                .style(Style::default().fg(Color::Yellow)),
-                        ];
-                        Row::new(cells)
-                    })
-                    .collect();
-
-                let table = Table::new(
-                    rows,
-                    &[
-                        Constraint::Length(3),
-                        Constraint::Length(30),
-                        Constraint::Length(5),
-                        Constraint::Length(5),
-                        Constraint::Length(20),
-                        Constraint::Length(100), // Increased width for process info
-                    ],
-                )
-                .header(Row::new(vec![
-                    Cell::from("GPU").style(
-                        Style::default()
-                            .fg(Color::Cyan)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Cell::from("Name").style(
-                        Style::default()
-                            .fg(Color::Green)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Cell::from("Temp")
-                        .style(Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
-                    Cell::from("Util").style(
-                        Style::default()
-                            .fg(Color::Magenta)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Cell::from("Memory").style(
-                        Style::default()
-                            .fg(Color::Blue)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Cell::from("Process Info").style(
-                        Style::default()
-                            .fg(Color::Yellow)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                ]))
-                .block(Block::default().borders(Borders::ALL));
-
-                f.render_widget(table, chunks[0]);
+                render_gpu_info(f, main_layout[0], &gpu_infos);
+                render_process_list(f, main_layout[1], &gpu_infos);
             })?;
         }
     }
@@ -199,6 +131,120 @@ fn main() -> Result<(), Box<dyn Error>> {
     terminal.show_cursor()?;
 
     Ok(())
+}
+
+fn render_gpu_info(f: &mut Frame, area: Rect, gpu_infos: &[GpuInfo]) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title("GPU Info (Press 'q' to quit)");
+    f.render_widget(block.clone(), area);
+
+    let gpu_area = block.inner(area);
+    let rows: Vec<Row> = gpu_infos
+        .iter()
+        .map(|info| {
+            let cells = vec![
+                Cell::from(info.index.to_string()).style(Style::default().fg(Color::Cyan)),
+                Cell::from(info.name.as_str()).style(Style::default().fg(Color::Green)),
+                Cell::from(format!("{}°C", info.temperature))
+                    .style(Style::default().fg(Color::Red)),
+                Cell::from(format!("{}%", info.utilization))
+                    .style(Style::default().fg(Color::Magenta)),
+                Cell::from(format!(
+                    "{}/{}MB",
+                    info.memory_used / 1_048_576,
+                    info.memory_total / 1_048_576
+                ))
+                .style(Style::default().fg(Color::Blue)),
+            ];
+            Row::new(cells)
+        })
+        .collect();
+
+    let table = Table::new(
+        rows,
+        &[
+            Constraint::Length(3),
+            Constraint::Length(30),
+            Constraint::Length(5),
+            Constraint::Length(5),
+            Constraint::Length(20),
+        ],
+    )
+    .header(Row::new(vec![
+        Cell::from("GPU").style(
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Cell::from("Name").style(
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Cell::from("Temp").style(Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+        Cell::from("Util").style(
+            Style::default()
+                .fg(Color::Magenta)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Cell::from("Memory").style(
+            Style::default()
+                .fg(Color::Blue)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]))
+    .widths(&[
+        Constraint::Length(3),
+        Constraint::Length(30),
+        Constraint::Length(5),
+        Constraint::Length(5),
+        Constraint::Length(20),
+    ])
+    .column_spacing(1);
+
+    f.render_widget(table, gpu_area);
+}
+
+fn render_process_list(f: &mut Frame, area: Rect, gpu_infos: &[GpuInfo]) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title("GPU Processes");
+    f.render_widget(block.clone(), area);
+
+    let process_area = block.inner(area);
+    let mut all_processes = Vec::new();
+
+    for (gpu_index, gpu_info) in gpu_infos.iter().enumerate() {
+        for process in &gpu_info.processes {
+            all_processes.push((gpu_index, process));
+        }
+    }
+
+    all_processes.sort_by(|a, b| b.1.used_gpu_memory.cmp(&a.1.used_gpu_memory));
+
+    let items: Vec<ListItem> = all_processes
+        .iter()
+        .map(|(gpu_index, process)| {
+            let content = format!(
+                "GPU {}: {} (PID: {}) - Memory: {}MB, CPU: {:.1}%, User: {}",
+                gpu_index,
+                process.command,
+                process.pid,
+                process.used_gpu_memory / 1_048_576,
+                process.cpu_usage,
+                process.username
+            );
+            ListItem::new(Span::raw(content))
+        })
+        .collect();
+
+    let process_list = List::new(items)
+        .block(Block::default().borders(Borders::NONE))
+        .highlight_style(Style::default().add_modifier(Modifier::BOLD))
+        .highlight_symbol("> ");
+
+    f.render_widget(process_list, process_area);
 }
 
 fn get_process_info(pid: u32, used_gpu_memory: u64) -> Option<GpuProcessInfo> {
