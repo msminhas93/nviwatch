@@ -148,12 +148,12 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }
             }
         }
-    
+
         if last_update.elapsed() >= Duration::from_millis(watch_interval) {
             last_update = Instant::now();
             app_state.gpu_infos = collect_gpu_info(&nvml, &mut app_state)?;
         }
-    
+
         terminal.draw(|f| ui(f, &app_state))?;
     }
 
@@ -581,17 +581,15 @@ fn collect_gpu_info(nvml: &Nvml, app_state: &mut AppState) -> Result<Vec<GpuInfo
 
     Ok(gpu_infos)
 }
+
 use ratatui::symbols;
-use ratatui::widgets::{Axis, Chart, Dataset};
+use ratatui::widgets::{Axis, Chart, Dataset, GraphType};
 
 fn render_gpu_graphs(f: &mut Frame, area: Rect, app_state: &AppState) {
     let gpu_count = app_state.gpu_infos.len();
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints(vec![
-            Constraint::Percentage((100 / gpu_count) as u16);
-            gpu_count
-        ])
+        .constraints(vec![Constraint::Percentage((100 / gpu_count) as u16); gpu_count])
         .split(area);
 
     for (index, gpu_info) in app_state.gpu_infos.iter().enumerate() {
@@ -611,21 +609,31 @@ fn render_gpu_graphs(f: &mut Frame, area: Rect, app_state: &AppState) {
         let power_dataset = Dataset::default()
             .name("Power (W)")
             .marker(symbols::Marker::Braille)
-            .graph_type(ratatui::widgets::GraphType::Line)
+            .graph_type(GraphType::Line)
             .style(Style::default().fg(Color::Yellow))
             .data(&power_data);
 
         let power_chart = Chart::new(vec![power_dataset])
-            .block(
-                Block::default()
-                    .title(format!("GPU {} Power", index))
-                    .borders(Borders::ALL),
+            .block(Block::default().title(format!("GPU {} Power", index)).borders(Borders::ALL))
+            .x_axis(
+                Axis::default()
+                    .title("Time (s)")
+                    .style(Style::default().fg(Color::Gray))
+                    .bounds([0.0, 60.0])
+                    .labels(["0", "15", "30", "45", "60"].iter().map(|&s| s.to_string()).collect::<Vec<String>>())
             )
-            .x_axis(Axis::default().title("Time (s)").bounds([0.0, 60.0]))
             .y_axis(
                 Axis::default()
                     .title("Power (W)")
-                    .bounds([0.0, gpu_info.power_limit as f64]),
+                    .style(Style::default().fg(Color::Gray))
+                    .bounds([0.0, gpu_info.power_limit as f64])
+                    .labels(
+                        [
+                            format!("{:.0}", 0.0),
+                            format!("{:.0}", gpu_info.power_limit as f64 / 2.0),
+                            format!("{:.0}", gpu_info.power_limit),
+                        ]
+                    )
             );
 
         f.render_widget(power_chart, gpu_chunks[0]);
@@ -640,21 +648,25 @@ fn render_gpu_graphs(f: &mut Frame, area: Rect, app_state: &AppState) {
         let util_dataset = Dataset::default()
             .name("Utilization (%)")
             .marker(symbols::Marker::Braille)
-            .graph_type(ratatui::widgets::GraphType::Line)
+            .graph_type(GraphType::Line)
             .style(Style::default().fg(Color::Magenta))
             .data(&util_data);
 
         let util_chart = Chart::new(vec![util_dataset])
-            .block(
-                Block::default()
-                    .title(format!("GPU {} Utilization", index))
-                    .borders(Borders::ALL),
+            .block(Block::default().title(format!("GPU {} Utilization", index)).borders(Borders::ALL))
+            .x_axis(
+                Axis::default()
+                    .title("Time (s)")
+                    .style(Style::default().fg(Color::Gray))
+                    .bounds([0.0, 60.0])
+                    .labels(["0", "15", "30", "45", "60"].iter().map(|&s| s.to_string()).collect::<Vec<String>>())
             )
-            .x_axis(Axis::default().title("Time (s)").bounds([0.0, 60.0]))
             .y_axis(
                 Axis::default()
                     .title("Utilization (%)")
-                    .bounds([0.0, 100.0]),
+                    .style(Style::default().fg(Color::Gray))
+                    .bounds([0.0, 100.0])
+                    .labels(["0", "25", "50", "75", "100"].iter().map(|&s| s.to_string()).collect::<Vec<String>>())
             );
 
         f.render_widget(util_chart, gpu_chunks[1]);
@@ -664,11 +676,14 @@ fn render_gpu_graphs(f: &mut Frame, area: Rect, app_state: &AppState) {
 fn ui(f: &mut Frame, app_state: &AppState) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage(20),
-            Constraint::Percentage(30),
-            Constraint::Percentage(50),
-        ].as_ref())
+        .constraints(
+            [
+                Constraint::Percentage(20),
+                Constraint::Percentage(30),
+                Constraint::Percentage(50),
+            ]
+            .as_ref(),
+        )
         .split(f.area());
 
     render_gpu_info(f, chunks[0], &app_state.gpu_infos);
