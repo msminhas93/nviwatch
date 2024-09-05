@@ -16,6 +16,8 @@ use crossterm::terminal::{
 };
 use flexi_logger::{FileSpec, Logger, WriteMode};
 use log::info;
+use nix::sys::signal::{kill, Signal};
+use nix::unistd::Pid;
 use nix::unistd::{sysconf, SysconfVar};
 use nix::unistd::{Uid, User};
 use nvml::enum_wrappers::device::TemperatureSensor;
@@ -25,13 +27,20 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::layout::Rect;
 use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::widgets::{Block, Borders, Cell, Row, Table};
+use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table};
 use ratatui::Frame;
 use ratatui::Terminal;
 use std::error::Error;
 use std::fs;
 use std::io::stdout;
+use std::io::{Error as IoError, ErrorKind};
 use std::time::{Duration, Instant};
+
+struct AppState {
+    selected_process: usize,
+    gpu_infos: Vec<GpuInfo>,
+    error_message: Option<String>,
+}
 
 struct GpuInfo {
     index: usize,
@@ -89,29 +98,61 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut terminal = Terminal::new(backend)?;
 
     let mut last_update = Instant::now();
-    let mut gpu_infos: Vec<GpuInfo>;
+
+    let mut app_state = AppState {
+        selected_process: 0,
+        gpu_infos: Vec::new(),
+        error_message: None,
+    };
 
     loop {
         if event::poll(Duration::from_millis(100))? {
             if let Event::Key(key) = event::read()? {
-                if key.code == KeyCode::Char('q') {
-                    break;
+                match key.code {
+                    KeyCode::Char('q') => break,
+                    KeyCode::Up => {
+                        if app_state.selected_process > 0 {
+                            app_state.selected_process -= 1;
+                        }
+                    }
+                    KeyCode::Down => {
+                        let total_processes: usize = app_state
+                            .gpu_infos
+                            .iter()
+                            .map(|gpu| gpu.processes.len())
+                            .sum();
+                        if app_state.selected_process < total_processes - 1 {
+                            app_state.selected_process += 1;
+                        }
+                    }
+                    KeyCode::Char('x') => {
+                        match kill_selected_process(&app_state) {
+                            Ok(_) => {
+                                // Refresh the process list immediately after killing a process
+                                app_state.gpu_infos = collect_gpu_info(&nvml)?;
+                            }
+                            Err(e) => {
+                                // Store the error message to display it in the UI
+                                app_state.error_message = Some(e.to_string());
+                            }
+                        }
+                    }
+                    _ => {}
                 }
             }
         }
 
         if last_update.elapsed() >= Duration::from_millis(watch_interval) {
             last_update = Instant::now();
-            gpu_infos = collect_gpu_info(&nvml)?;
+            app_state.gpu_infos = collect_gpu_info(&nvml)?;
             terminal.draw(|f| {
                 let area = f.area();
                 let main_layout = Layout::default()
                     .direction(Direction::Vertical)
                     .constraints([Constraint::Percentage(30), Constraint::Percentage(70)].as_ref())
                     .split(area);
-
-                render_gpu_info(f, main_layout[0], &gpu_infos);
-                render_process_list(f, main_layout[1], &gpu_infos);
+                render_gpu_info(f, main_layout[0], &app_state.gpu_infos);
+                render_process_list(f, main_layout[1], &app_state);
             })?;
         }
     }
@@ -121,6 +162,37 @@ fn main() -> Result<(), Box<dyn Error>> {
     terminal.show_cursor()?;
 
     Ok(())
+}
+
+fn kill_selected_process(app_state: &AppState) -> Result<(), Box<dyn std::error::Error>> {
+    let mut process_index = app_state.selected_process;
+    for gpu_info in &app_state.gpu_infos {
+        if process_index < gpu_info.processes.len() {
+            let pid = gpu_info.processes[process_index].pid;
+            let pid = Pid::from_raw(pid as i32);
+
+            match kill(pid, Signal::SIGTERM) {
+                Ok(_) => return Ok(()),
+                Err(nix::Error::EPERM) => {
+                    return Err(Box::new(IoError::new(
+                        ErrorKind::PermissionDenied,
+                        format!("Permission denied to terminate process {}", pid)
+                    )));
+                },
+                Err(e) => {
+                    return Err(Box::new(IoError::new(
+                        ErrorKind::Other,
+                        format!("Failed to terminate process {}: {}", pid, e)
+                    )));
+                }
+            }
+        }
+        process_index -= gpu_info.processes.len();
+    }
+    Err(Box::new(IoError::new(
+        ErrorKind::NotFound,
+        "Selected process not found"
+    )))
 }
 
 fn render_gpu_info(f: &mut Frame, area: Rect, gpu_infos: &[GpuInfo]) {
@@ -196,7 +268,7 @@ fn render_gpu_info(f: &mut Frame, area: Rect, gpu_infos: &[GpuInfo]) {
     f.render_widget(table, gpu_area);
 }
 
-fn render_process_list(f: &mut Frame, area: Rect, gpu_infos: &[GpuInfo]) {
+fn render_process_list(f: &mut Frame, area: Rect, app_state: &AppState) {
     let block = Block::default()
         .borders(Borders::ALL)
         .title("GPU Processes");
@@ -204,27 +276,34 @@ fn render_process_list(f: &mut Frame, area: Rect, gpu_infos: &[GpuInfo]) {
     let process_area = block.inner(area);
 
     let mut all_processes = Vec::new();
-    for (gpu_index, gpu_info) in gpu_infos.iter().enumerate() {
+    for (gpu_index, gpu_info) in app_state.gpu_infos.iter().enumerate() {
         for process in &gpu_info.processes {
             all_processes.push((gpu_index, process));
         }
     }
+
     all_processes.sort_by(|a, b| b.1.used_gpu_memory.cmp(&a.1.used_gpu_memory));
 
     let rows: Vec<Row> = all_processes
         .iter()
-        .map(|(gpu_index, process)| {
+        .enumerate()
+        .map(|(index, (gpu_index, process))| {
+            let style = if index == app_state.selected_process {
+                Style::default().bg(Color::DarkGray)
+            } else {
+                Style::default()
+            };
+
             Row::new(vec![
-                Cell::from(gpu_index.to_string()).style(Style::default().fg(Color::Cyan)),
-                Cell::from(process.pid.to_string()).style(Style::default().fg(Color::Yellow)),
+                Cell::from(gpu_index.to_string()).style(style.fg(Color::Cyan)),
+                Cell::from(process.pid.to_string()).style(style.fg(Color::Yellow)),
                 Cell::from(format!("{}MB", process.used_gpu_memory / 1_048_576))
-                    .style(Style::default().fg(Color::Green)),
-                Cell::from(format!("{:.1}%", process.cpu_usage))
-                    .style(Style::default().fg(Color::Magenta)),
+                    .style(style.fg(Color::Green)),
+                Cell::from(format!("{:.1}%", process.cpu_usage)).style(style.fg(Color::Magenta)),
                 Cell::from(format!("{}MB", process.memory_usage / 1_048_576))
-                    .style(Style::default().fg(Color::Blue)),
-                Cell::from(process.username.as_str()).style(Style::default().fg(Color::Red)),
-                Cell::from(process.command.as_str()),
+                    .style(style.fg(Color::Blue)),
+                Cell::from(process.username.as_str()).style(style.fg(Color::Red)),
+                Cell::from(process.command.as_str()).style(style),
             ])
         })
         .collect();
@@ -271,6 +350,20 @@ fn render_process_list(f: &mut Frame, area: Rect, gpu_infos: &[GpuInfo]) {
         Cell::from("Command").style(Style::default().add_modifier(Modifier::BOLD)),
     ]))
     .column_spacing(1);
+
+    if let Some(error_msg) = &app_state.error_message {
+        let error_text = textwrap::wrap(error_msg, process_area.width as usize - 2);
+        let error_paragraph = Paragraph::new(error_text.join("\n"))
+            .style(Style::default().fg(Color::Red))
+            .block(Block::default().borders(Borders::ALL).title("Error"));
+        let error_area = Rect {
+            x: process_area.x,
+            y: process_area.y + process_area.height - 3,
+            width: process_area.width,
+            height: 3,
+        };
+        f.render_widget(error_paragraph, error_area);
+    }
 
     f.render_widget(table, process_area);
 }
