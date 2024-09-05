@@ -42,8 +42,9 @@ struct AppState {
     selected_process: usize,
     gpu_infos: Vec<GpuInfo>,
     error_message: Option<String>,
+    power_history: Vec<Vec<u64>>,
+    utilization_history: Vec<Vec<u64>>,
 }
-
 struct GpuInfo {
     index: usize,
     name: String,
@@ -108,8 +109,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         selected_process: 0,
         gpu_infos: Vec::new(),
         error_message: None,
+        power_history: Vec::new(),
+        utilization_history: Vec::new(),
     };
-
     loop {
         if event::poll(Duration::from_millis(100))? {
             if let Event::Key(key) = event::read()? {
@@ -134,7 +136,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                         match kill_selected_process(&app_state) {
                             Ok(_) => {
                                 // Refresh the process list immediately after killing a process
-                                app_state.gpu_infos = collect_gpu_info(&nvml)?;
+                                app_state.gpu_infos = collect_gpu_info(&nvml, &mut app_state)?;
                             }
                             Err(e) => {
                                 // Store the error message to display it in the UI
@@ -146,21 +148,13 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }
             }
         }
-
+    
         if last_update.elapsed() >= Duration::from_millis(watch_interval) {
             last_update = Instant::now();
-            app_state.gpu_infos = collect_gpu_info(&nvml)?;
-            terminal.draw(|f| {
-                let area = f.area();
-                let main_layout = Layout::default()
-                    .direction(Direction::Vertical)
-                    .constraints([Constraint::Percentage(30), Constraint::Percentage(70)].as_ref())
-                    .split(area);
-
-                render_gpu_info(f, main_layout[0], &app_state.gpu_infos);
-                render_process_list(f, main_layout[1], &app_state);
-            })?;
+            app_state.gpu_infos = collect_gpu_info(&nvml, &mut app_state)?;
         }
+    
+        terminal.draw(|f| ui(f, &app_state))?;
     }
 
     disable_raw_mode()?;
@@ -520,7 +514,7 @@ fn get_system_uptime() -> f64 {
         .unwrap_or(0.0)
 }
 
-fn collect_gpu_info(nvml: &Nvml) -> Result<Vec<GpuInfo>, Box<dyn Error>> {
+fn collect_gpu_info(nvml: &Nvml, app_state: &mut AppState) -> Result<Vec<GpuInfo>, Box<dyn Error>> {
     let device_count = nvml.device_count()?;
     let mut gpu_infos = Vec::new();
 
@@ -558,7 +552,19 @@ fn collect_gpu_info(nvml: &Nvml) -> Result<Vec<GpuInfo>, Box<dyn Error>> {
                 get_process_info(p.pid, used_gpu_memory)
             })
             .collect();
+        // Update historical data
+        if app_state.power_history.len() <= index as usize {
+            app_state.power_history.push(Vec::new());
+            app_state.utilization_history.push(Vec::new());
+        }
+        app_state.power_history[index as usize].push(power_usage as u64);
+        app_state.utilization_history[index as usize].push(utilization as u64);
 
+        // Keep only the last 60 data points (for a 1-minute graph)
+        if app_state.power_history[index as usize].len() > 60 {
+            app_state.power_history[index as usize].remove(0);
+            app_state.utilization_history[index as usize].remove(0);
+        }
         gpu_infos.push(GpuInfo {
             index: index as usize,
             name,
@@ -574,4 +580,98 @@ fn collect_gpu_info(nvml: &Nvml) -> Result<Vec<GpuInfo>, Box<dyn Error>> {
     }
 
     Ok(gpu_infos)
+}
+use ratatui::symbols;
+use ratatui::widgets::{Axis, Chart, Dataset};
+
+fn render_gpu_graphs(f: &mut Frame, area: Rect, app_state: &AppState) {
+    let gpu_count = app_state.gpu_infos.len();
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(vec![
+            Constraint::Percentage((100 / gpu_count) as u16);
+            gpu_count
+        ])
+        .split(area);
+
+    for (index, gpu_info) in app_state.gpu_infos.iter().enumerate() {
+        let gpu_area = chunks[index];
+        let gpu_chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)].as_ref())
+            .split(gpu_area);
+
+        // Power graph
+        let power_data: Vec<(f64, f64)> = app_state.power_history[index]
+            .iter()
+            .enumerate()
+            .map(|(i, &v)| (i as f64, v as f64))
+            .collect();
+
+        let power_dataset = Dataset::default()
+            .name("Power (W)")
+            .marker(symbols::Marker::Braille)
+            .graph_type(ratatui::widgets::GraphType::Line)
+            .style(Style::default().fg(Color::Yellow))
+            .data(&power_data);
+
+        let power_chart = Chart::new(vec![power_dataset])
+            .block(
+                Block::default()
+                    .title(format!("GPU {} Power", index))
+                    .borders(Borders::ALL),
+            )
+            .x_axis(Axis::default().title("Time (s)").bounds([0.0, 60.0]))
+            .y_axis(
+                Axis::default()
+                    .title("Power (W)")
+                    .bounds([0.0, gpu_info.power_limit as f64]),
+            );
+
+        f.render_widget(power_chart, gpu_chunks[0]);
+
+        // Utilization graph
+        let util_data: Vec<(f64, f64)> = app_state.utilization_history[index]
+            .iter()
+            .enumerate()
+            .map(|(i, &v)| (i as f64, v as f64))
+            .collect();
+
+        let util_dataset = Dataset::default()
+            .name("Utilization (%)")
+            .marker(symbols::Marker::Braille)
+            .graph_type(ratatui::widgets::GraphType::Line)
+            .style(Style::default().fg(Color::Magenta))
+            .data(&util_data);
+
+        let util_chart = Chart::new(vec![util_dataset])
+            .block(
+                Block::default()
+                    .title(format!("GPU {} Utilization", index))
+                    .borders(Borders::ALL),
+            )
+            .x_axis(Axis::default().title("Time (s)").bounds([0.0, 60.0]))
+            .y_axis(
+                Axis::default()
+                    .title("Utilization (%)")
+                    .bounds([0.0, 100.0]),
+            );
+
+        f.render_widget(util_chart, gpu_chunks[1]);
+    }
+}
+
+fn ui(f: &mut Frame, app_state: &AppState) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage(20),
+            Constraint::Percentage(30),
+            Constraint::Percentage(50),
+        ].as_ref())
+        .split(f.area());
+
+    render_gpu_info(f, chunks[0], &app_state.gpu_infos);
+    render_gpu_graphs(f, chunks[1], app_state);
+    render_process_list(f, chunks[2], app_state);
 }
