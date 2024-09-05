@@ -5,13 +5,13 @@ extern crate nvml_wrapper as nvml;
 extern crate procfs;
 extern crate ratatui;
 extern crate textwrap;
-
 use clap::{Arg, Command};
 use crossterm::event::{self, Event, KeyCode};
 use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
+use std::cmp;
 
 use nix::sys::signal::{kill, Signal};
 use nix::unistd::Pid;
@@ -26,7 +26,7 @@ use ratatui::layout::Rect;
 use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::prelude::Alignment;
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table};
+use ratatui::widgets::{Block, Borders, Cell, Gauge, Paragraph, Row, Table};
 use ratatui::Frame;
 use ratatui::Terminal;
 use std::error::Error;
@@ -43,6 +43,7 @@ struct AppState {
     power_history: Vec<Vec<u64>>,
     utilization_history: Vec<Vec<u64>>,
     use_tabbed_graphs: bool,
+    use_bar_charts: bool,
 }
 struct GpuInfo {
     index: usize,
@@ -87,9 +88,17 @@ fn main() -> Result<(), Box<dyn Error>> {
                 .help("Display GPU graphs in tabbed view")
                 .action(clap::ArgAction::SetTrue),
         )
+        .arg(
+            Arg::new("bar-chart")
+                .short('b')
+                .long("bar-chart")
+                .help("Display GPU graphs as bar charts")
+                .action(clap::ArgAction::SetTrue),
+        )
         .get_matches();
 
     let use_tabbed_graphs = matches.get_flag("tabbed-graphs");
+    let use_bar_charts = matches.get_flag("bar-chart");
 
     let watch_interval = matches
         .get_one::<String>("watch")
@@ -115,8 +124,15 @@ fn main() -> Result<(), Box<dyn Error>> {
         power_history: Vec::new(),
         utilization_history: Vec::new(),
         use_tabbed_graphs,
+        use_bar_charts,
     };
     loop {
+        if last_update.elapsed() >= Duration::from_millis(watch_interval) {
+            last_update = Instant::now();
+            collect_gpu_info(&nvml, &mut app_state)?;
+            terminal.draw(|f| ui(f, &app_state))?;
+        }
+
         if event::poll(Duration::from_millis(100))? {
             if let Event::Key(key) = event::read()? {
                 match key.code {
@@ -365,7 +381,61 @@ fn render_gpu_info(f: &mut Frame, area: Rect, gpu_infos: &[GpuInfo]) {
 
     f.render_widget(table, gpu_area);
 }
+fn render_gpu_bar_charts(f: &mut Frame, area: Rect, app_state: &AppState) {
+    let gpu_count = app_state.gpu_infos.len();
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(vec![
+            Constraint::Percentage((100 / gpu_count) as u16);
+            gpu_count
+        ])
+        .split(area);
 
+    for (index, gpu_info) in app_state.gpu_infos.iter().enumerate() {
+        let gpu_area = chunks[index];
+        let gpu_chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)].as_ref())
+            .split(gpu_area);
+
+        render_power_bar(f, gpu_chunks[0], gpu_info, index);
+        render_utilization_bar(f, gpu_chunks[1], gpu_info, index);
+    }
+}
+
+fn render_power_bar(f: &mut Frame, area: Rect, gpu_info: &GpuInfo, gpu_index: usize) {
+    let power_percentage = cmp::min(
+        100,
+        ((gpu_info.power_usage as f64 / gpu_info.power_limit as f64) * 100.0) as u16,
+    );
+    let power_bar = Gauge::default()
+        .block(
+            Block::default()
+                .title(format!("GPU {} Power", gpu_index))
+                .borders(Borders::ALL),
+        )
+        .gauge_style(Style::default().fg(Color::Yellow))
+        .percent(power_percentage)
+        .label(format!(
+            "{}/{}W",
+            gpu_info.power_usage, gpu_info.power_limit
+        ));
+    f.render_widget(power_bar, area);
+}
+
+fn render_utilization_bar(f: &mut Frame, area: Rect, gpu_info: &GpuInfo, gpu_index: usize) {
+    let util_percentage = cmp::min(100, gpu_info.utilization as u16);
+    let util_bar = Gauge::default()
+        .block(
+            Block::default()
+                .title(format!("GPU {} Utilization", gpu_index))
+                .borders(Borders::ALL),
+        )
+        .gauge_style(Style::default().fg(Color::Magenta))
+        .percent(util_percentage)
+        .label(format!("{}%", gpu_info.utilization));
+    f.render_widget(util_bar, area);
+}
 fn render_process_list(f: &mut Frame, area: Rect, app_state: &AppState) {
     let layout = Layout::default()
         .direction(Direction::Vertical)
@@ -479,6 +549,8 @@ fn render_process_list(f: &mut Frame, area: Rect, app_state: &AppState) {
 fn render_footer(f: &mut Frame, area: Rect, app_state: &AppState) {
     let footer_text = if app_state.use_tabbed_graphs {
         "↑↓ to navigate processes | ←→ to switch GPU tabs | x to kill process | q to quit"
+    } else if app_state.use_bar_charts {
+        "↑↓ to navigate processes | x to kill process | q to quit"
     } else {
         "↑↓ to navigate processes | x to kill process | q to quit"
     };
@@ -538,8 +610,8 @@ fn collect_gpu_info(nvml: &Nvml, app_state: &mut AppState) -> Result<Vec<GpuInfo
     let device_count = nvml.device_count()?;
     let mut gpu_infos = Vec::new();
 
-    for index in 0..device_count {
-        let device = nvml.device_by_index(index)?;
+    for index in 0..device_count as usize {
+        let device = nvml.device_by_index(index as u32)?;
         let name = device.name()?;
         let temperature = device.temperature(TemperatureSensor::Gpu)?;
         let utilization = device.utilization_rates()?.gpu;
@@ -573,18 +645,39 @@ fn collect_gpu_info(nvml: &Nvml, app_state: &mut AppState) -> Result<Vec<GpuInfo
             })
             .collect();
         // Update historical data
-        if app_state.power_history.len() <= index as usize {
+        if app_state.power_history.len() <= index {
             app_state.power_history.push(Vec::new());
             app_state.utilization_history.push(Vec::new());
         }
-        app_state.power_history[index as usize].push(power_usage as u64);
-        app_state.utilization_history[index as usize].push(utilization as u64);
+
+        // Calculate how many seconds have passed since the last update
+        let seconds_passed = if !app_state.power_history[index].is_empty() {
+            (app_state.power_history[index].len() as u64).saturating_sub(60)
+        } else {
+            0
+        };
+
+        // Fill in missing data points with the last known value or 0
+        for _ in 0..seconds_passed {
+            let last_power = app_state.power_history[index].last().copied().unwrap_or(0);
+            let last_util = app_state.utilization_history[index]
+                .last()
+                .copied()
+                .unwrap_or(0);
+            app_state.power_history[index].push(last_power);
+            app_state.utilization_history[index].push(last_util);
+        }
+
+        // Add the current data point
+        app_state.power_history[index].push(power_usage as u64);
+        app_state.utilization_history[index].push(utilization as u64);
 
         // Keep only the last 60 data points (for a 1-minute graph)
-        if app_state.power_history[index as usize].len() > 60 {
-            app_state.power_history[index as usize].remove(0);
-            app_state.utilization_history[index as usize].remove(0);
+        while app_state.power_history[index].len() > 60 {
+            app_state.power_history[index].remove(0);
+            app_state.utilization_history[index].remove(0);
         }
+
         gpu_infos.push(GpuInfo {
             index: index as usize,
             name,
@@ -608,7 +701,9 @@ use ratatui::widgets::GraphType;
 use ratatui::widgets::{Axis, Chart, Dataset, Tabs};
 
 fn render_gpu_graphs(f: &mut Frame, area: Rect, app_state: &AppState) {
-    if app_state.use_tabbed_graphs {
+    if app_state.use_bar_charts {
+        render_gpu_bar_charts(f, area, app_state);
+    } else if app_state.use_tabbed_graphs {
         render_tabbed_gpu_graphs(f, area, app_state);
     } else {
         render_all_gpu_graphs(f, area, app_state);
@@ -746,14 +841,16 @@ fn render_utilization_graph(f: &mut Frame, area: Rect, app_state: &AppState, gpu
         .style(Style::default().fg(Color::Magenta))
         .data(&util_data);
 
-    let util_baseline_dataset = Dataset::default()
-        .name("Baseline")
+    // Add a reference line at 100% utilization
+    let util_max_data = vec![(0.0, 100.0), (59.0, 100.0)];
+    let util_max_dataset = Dataset::default()
+        .name("Max Utilization")
         .marker(symbols::Marker::Braille)
-        .graph_type(ratatui::widgets::GraphType::Line)
-        .style(Style::default().fg(Color::Gray))
-        .data(&[(0.0, 0.0), (59.0, 0.0)]);
+        .graph_type(GraphType::Line)
+        .style(Style::default().fg(Color::Red))
+        .data(&util_max_data);
 
-    let util_chart = Chart::new(vec![util_dataset, util_baseline_dataset])
+    let util_chart = Chart::new(vec![util_dataset, util_max_dataset])
         .block(
             Block::default()
                 .title(format!("GPU {} Utilization", gpu_index))
