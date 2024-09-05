@@ -82,6 +82,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         )
         .arg(
             Arg::new("tabbed-graphs")
+                .short('t')
                 .long("tabbed-graphs")
                 .help("Display GPU graphs in tabbed view")
                 .action(clap::ArgAction::SetTrue),
