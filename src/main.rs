@@ -19,24 +19,19 @@ use log::info;
 use nix::unistd::{sysconf, SysconfVar};
 use nix::unistd::{Uid, User};
 use nvml::enum_wrappers::device::TemperatureSensor;
-use nvml::struct_wrappers::device::ProcessInfo as NvmlProcessInfo;
 use nvml::Nvml;
 use procfs::process::Process;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::Rect;
 use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::Span;
-use ratatui::widgets::{Block, Borders, Cell, List, ListItem, Row, Table};
+use ratatui::widgets::{Block, Borders, Cell, Row, Table};
 use ratatui::Frame;
 use ratatui::Terminal;
-use std::collections::HashMap;
 use std::error::Error;
 use std::fs;
 use std::io::stdout;
-use std::io::Stdout;
 use std::time::{Duration, Instant};
-use textwrap::fill;
 
 struct GpuInfo {
     index: usize,
@@ -55,11 +50,6 @@ struct GpuProcessInfo {
     username: String,
     command: String,
     cpu_usage: f32,
-    memory_usage: u64,
-}
-
-struct UserMemoryUsage {
-    username: String,
     memory_usage: u64,
 }
 
@@ -99,7 +89,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut terminal = Terminal::new(backend)?;
 
     let mut last_update = Instant::now();
-    let mut gpu_infos = Vec::new();
+    let mut gpu_infos: Vec<GpuInfo>;
 
     loop {
         if event::poll(Duration::from_millis(100))? {
@@ -117,7 +107,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 let area = f.area();
                 let main_layout = Layout::default()
                     .direction(Direction::Vertical)
-                    .constraints([Constraint::Percentage(60), Constraint::Percentage(40)].as_ref())
+                    .constraints([Constraint::Percentage(30), Constraint::Percentage(70)].as_ref())
                     .split(area);
 
                 render_gpu_info(f, main_layout[0], &gpu_infos);
@@ -211,40 +201,78 @@ fn render_process_list(f: &mut Frame, area: Rect, gpu_infos: &[GpuInfo]) {
         .borders(Borders::ALL)
         .title("GPU Processes");
     f.render_widget(block.clone(), area);
-
     let process_area = block.inner(area);
-    let mut all_processes = Vec::new();
 
+    let mut all_processes = Vec::new();
     for (gpu_index, gpu_info) in gpu_infos.iter().enumerate() {
         for process in &gpu_info.processes {
             all_processes.push((gpu_index, process));
         }
     }
-
     all_processes.sort_by(|a, b| b.1.used_gpu_memory.cmp(&a.1.used_gpu_memory));
 
-    let items: Vec<ListItem> = all_processes
+    let rows: Vec<Row> = all_processes
         .iter()
         .map(|(gpu_index, process)| {
-            let content = format!(
-                "GPU {}: {} (PID: {}) - Memory: {}MB, CPU: {:.1}%, User: {}",
-                gpu_index,
-                process.command,
-                process.pid,
-                process.used_gpu_memory / 1_048_576,
-                process.cpu_usage,
-                process.username
-            );
-            ListItem::new(Span::raw(content))
+            Row::new(vec![
+                Cell::from(gpu_index.to_string()).style(Style::default().fg(Color::Cyan)),
+                Cell::from(process.pid.to_string()).style(Style::default().fg(Color::Yellow)),
+                Cell::from(format!("{}MB", process.used_gpu_memory / 1_048_576))
+                    .style(Style::default().fg(Color::Green)),
+                Cell::from(format!("{:.1}%", process.cpu_usage))
+                    .style(Style::default().fg(Color::Magenta)),
+                Cell::from(format!("{}MB", process.memory_usage / 1_048_576))
+                    .style(Style::default().fg(Color::Blue)),
+                Cell::from(process.username.as_str()).style(Style::default().fg(Color::Red)),
+                Cell::from(process.command.as_str()),
+            ])
         })
         .collect();
 
-    let process_list = List::new(items)
-        .block(Block::default().borders(Borders::NONE))
-        .highlight_style(Style::default().add_modifier(Modifier::BOLD))
-        .highlight_symbol("> ");
+    let table = Table::new(
+        rows,
+        &[
+            Constraint::Length(3),
+            Constraint::Length(7),
+            Constraint::Length(8),
+            Constraint::Length(6),
+            Constraint::Length(8),
+            Constraint::Length(15),
+            Constraint::Percentage(100),
+        ],
+    )
+    .header(Row::new(vec![
+        Cell::from("GPU").style(
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Cell::from("PID").style(
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Cell::from("GPU Mem").style(
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Cell::from("CPU").style(
+            Style::default()
+                .fg(Color::Magenta)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Cell::from("Mem").style(
+            Style::default()
+                .fg(Color::Blue)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Cell::from("User").style(Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+        Cell::from("Command").style(Style::default().add_modifier(Modifier::BOLD)),
+    ]))
+    .column_spacing(1);
 
-    f.render_widget(process_list, process_area);
+    f.render_widget(table, process_area);
 }
 
 fn get_process_info(pid: u32, used_gpu_memory: u64) -> Option<GpuProcessInfo> {
@@ -342,95 +370,4 @@ fn collect_gpu_info(nvml: &Nvml) -> Result<Vec<GpuInfo>, Box<dyn Error>> {
     }
 
     Ok(gpu_infos)
-}
-
-fn process_info_to_struct(process: NvmlProcessInfo) -> Option<GpuProcessInfo> {
-    let used_gpu_memory = match process.used_gpu_memory {
-        nvml::enums::device::UsedGpuMemory::Used(bytes) => bytes,
-        nvml::enums::device::UsedGpuMemory::Unavailable => 0,
-    };
-
-    if let Some(username) = get_user_by_pid(process.pid) {
-        if let Ok(proc) = Process::new(process.pid as i32) {
-            let command = proc.cmdline().unwrap_or_default().join(" ");
-            let cpu_usage = proc
-                .stat()
-                .ok()
-                .and_then(|stat| {
-                    let total_time = stat.utime + stat.stime;
-                    let clock_ticks = get_clock_ticks_per_second();
-                    let uptime = get_system_uptime();
-                    Some((total_time as f64 / clock_ticks as f64 / uptime * 100.0) as f32)
-                })
-                .unwrap_or(0.0);
-            let memory_usage = proc.stat().ok().map(|stat| stat.rss * 4096).unwrap_or(0);
-
-            return Some(GpuProcessInfo {
-                pid: process.pid,
-                used_gpu_memory,
-                username,
-                command,
-                cpu_usage,
-                memory_usage,
-            });
-        }
-    }
-    None
-}
-
-fn format_process_info(processes: &[GpuProcessInfo]) -> String {
-    let mut user_info: HashMap<String, Vec<&GpuProcessInfo>> = HashMap::new();
-
-    for process in processes {
-        user_info
-            .entry(process.username.clone())
-            .or_default()
-            .push(process);
-    }
-
-    let mut sorted_users: Vec<_> = user_info.into_iter().collect();
-    sorted_users.sort_by(|a, b| {
-        let a_mem: u64 = a.1.iter().map(|p| p.used_gpu_memory).sum();
-        let b_mem: u64 = b.1.iter().map(|p| p.used_gpu_memory).sum();
-        b_mem.cmp(&a_mem)
-    });
-
-    let user_info: String = sorted_users
-        .iter()
-        .map(|(user, processes)| {
-            let total_gpu_mem: u64 = processes.iter().map(|p| p.used_gpu_memory).sum();
-            let process_info: String = processes
-                .iter()
-                .map(|p| {
-                    format!(
-                        "{}({:.1}%CPU,{}MB)",
-                        p.pid,
-                        p.cpu_usage,
-                        p.memory_usage / 1_048_576
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join(",");
-            format!(
-                "{}({}MB)[{}]",
-                user,
-                total_gpu_mem / 1_048_576,
-                process_info
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(" ");
-
-    fill(&user_info, 100) // Increased width to accommodate more information
-}
-
-fn get_user_by_pid(pid: u32) -> Option<String> {
-    if let Ok(process) = Process::new(pid as i32) {
-        if let Ok(uid) = process.uid() {
-            if let Ok(Some(user)) = User::from_uid(Uid::from_raw(uid)) {
-                return Some(user.name);
-            }
-        }
-    }
-    None
 }
