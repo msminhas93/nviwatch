@@ -1,7 +1,5 @@
 extern crate clap;
 extern crate crossterm;
-extern crate flexi_logger;
-extern crate log;
 extern crate nix;
 extern crate nvml_wrapper as nvml;
 extern crate procfs;
@@ -14,8 +12,7 @@ use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
-use flexi_logger::{FileSpec, Logger, WriteMode};
-use log::info;
+
 use nix::sys::signal::{kill, Signal};
 use nix::unistd::Pid;
 
@@ -69,11 +66,6 @@ struct GpuProcessInfo {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    Logger::try_with_str("debug")?
-        .log_to_file(FileSpec::default())
-        .write_mode(WriteMode::BufferAndFlush)
-        .start()?;
-
     let matches = Command::new("gpu-info-rs")
         .version("0.1.0")
         .author("Your Name")
@@ -94,7 +86,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         .unwrap_or(1000);
 
     let nvml = Nvml::init()?;
-    info!("Initialized NVML");
 
     let mut stdout = stdout();
     execute!(stdout, EnterAlternateScreen)?;
@@ -589,7 +580,10 @@ fn render_gpu_graphs(f: &mut Frame, area: Rect, app_state: &AppState) {
     let gpu_count = app_state.gpu_infos.len();
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints(vec![Constraint::Percentage((100 / gpu_count) as u16); gpu_count])
+        .constraints(vec![
+            Constraint::Percentage((100 / gpu_count) as u16);
+            gpu_count
+        ])
         .split(area);
 
     for (index, gpu_info) in app_state.gpu_infos.iter().enumerate() {
@@ -614,26 +608,33 @@ fn render_gpu_graphs(f: &mut Frame, area: Rect, app_state: &AppState) {
             .data(&power_data);
 
         let power_chart = Chart::new(vec![power_dataset])
-            .block(Block::default().title(format!("GPU {} Power", index)).borders(Borders::ALL))
+            .block(
+                Block::default()
+                    .title(format!("GPU {} Power", index))
+                    .borders(Borders::ALL),
+            )
             .x_axis(
                 Axis::default()
                     .title("Time (s)")
                     .style(Style::default().fg(Color::Gray))
                     .bounds([0.0, 60.0])
-                    .labels(["0", "15", "30", "45", "60"].iter().map(|&s| s.to_string()).collect::<Vec<String>>())
+                    .labels(
+                        ["0", "15", "30", "45", "60"]
+                            .iter()
+                            .map(|&s| s.to_string())
+                            .collect::<Vec<String>>(),
+                    ),
             )
             .y_axis(
                 Axis::default()
                     .title("Power (W)")
                     .style(Style::default().fg(Color::Gray))
                     .bounds([0.0, gpu_info.power_limit as f64])
-                    .labels(
-                        [
-                            format!("{:.0}", 0.0),
-                            format!("{:.0}", gpu_info.power_limit as f64 / 2.0),
-                            format!("{:.0}", gpu_info.power_limit),
-                        ]
-                    )
+                    .labels([
+                        format!("{:.0}", 0.0),
+                        format!("{:.0}", gpu_info.power_limit as f64 / 2.0),
+                        format!("{:.0}", gpu_info.power_limit),
+                    ]),
             );
 
         f.render_widget(power_chart, gpu_chunks[0]);
@@ -653,20 +654,34 @@ fn render_gpu_graphs(f: &mut Frame, area: Rect, app_state: &AppState) {
             .data(&util_data);
 
         let util_chart = Chart::new(vec![util_dataset])
-            .block(Block::default().title(format!("GPU {} Utilization", index)).borders(Borders::ALL))
+            .block(
+                Block::default()
+                    .title(format!("GPU {} Utilization", index))
+                    .borders(Borders::ALL),
+            )
             .x_axis(
                 Axis::default()
                     .title("Time (s)")
                     .style(Style::default().fg(Color::Gray))
                     .bounds([0.0, 60.0])
-                    .labels(["0", "15", "30", "45", "60"].iter().map(|&s| s.to_string()).collect::<Vec<String>>())
+                    .labels(
+                        ["0", "15", "30", "45", "60"]
+                            .iter()
+                            .map(|&s| s.to_string())
+                            .collect::<Vec<String>>(),
+                    ),
             )
             .y_axis(
                 Axis::default()
                     .title("Utilization (%)")
                     .style(Style::default().fg(Color::Gray))
                     .bounds([0.0, 100.0])
-                    .labels(["0", "25", "50", "75", "100"].iter().map(|&s| s.to_string()).collect::<Vec<String>>())
+                    .labels(
+                        ["0", "25", "50", "75", "100"]
+                            .iter()
+                            .map(|&s| s.to_string())
+                            .collect::<Vec<String>>(),
+                    ),
             );
 
         f.render_widget(util_chart, gpu_chunks[1]);
