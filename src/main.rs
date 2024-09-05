@@ -37,6 +37,7 @@ use std::time::{Duration, Instant};
 
 struct AppState {
     selected_process: usize,
+    selected_gpu_tab: usize,
     gpu_infos: Vec<GpuInfo>,
     error_message: Option<String>,
     power_history: Vec<Vec<u64>>,
@@ -98,6 +99,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let mut app_state = AppState {
         selected_process: 0,
+        selected_gpu_tab: 0,
         gpu_infos: Vec::new(),
         error_message: None,
         power_history: Vec::new(),
@@ -121,6 +123,16 @@ fn main() -> Result<(), Box<dyn Error>> {
                             .sum();
                         if app_state.selected_process < total_processes - 1 {
                             app_state.selected_process += 1;
+                        }
+                    }
+                    KeyCode::Left => {
+                        if app_state.selected_gpu_tab > 0 {
+                            app_state.selected_gpu_tab -= 1;
+                        }
+                    }
+                    KeyCode::Right => {
+                        if app_state.selected_gpu_tab < app_state.gpu_infos.len() - 1 {
+                            app_state.selected_gpu_tab += 1;
                         }
                     }
                     KeyCode::Char('x') => {
@@ -574,27 +586,44 @@ fn collect_gpu_info(nvml: &Nvml, app_state: &mut AppState) -> Result<Vec<GpuInfo
 }
 
 use ratatui::symbols;
-use ratatui::widgets::{Axis, Chart, Dataset, GraphType};
+use ratatui::text::Line;
+use ratatui::widgets::GraphType;
+use ratatui::widgets::{Axis, Chart, Dataset, Tabs};
 
 fn render_gpu_graphs(f: &mut Frame, area: Rect, app_state: &AppState) {
-    let gpu_count = app_state.gpu_infos.len();
+    // Create tab titles
+    let titles: Vec<Line> = app_state
+        .gpu_infos
+        .iter()
+        .enumerate()
+        .map(|(i, _)| Line::from(format!("GPU {}", i)))
+        .collect();
+
+    // Create Tabs widget
+    let tabs = Tabs::new(titles)
+        .block(Block::default().borders(Borders::ALL).title("GPU Graphs"))
+        .select(app_state.selected_gpu_tab)
+        .style(Style::default().fg(Color::White))
+        .highlight_style(Style::default().fg(Color::Yellow));
+
+    // Render tabs
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints(vec![
-            Constraint::Percentage((100 / gpu_count) as u16);
-            gpu_count
-        ])
+        .constraints([Constraint::Length(3), Constraint::Min(0)].as_ref())
         .split(area);
 
-    for (index, gpu_info) in app_state.gpu_infos.iter().enumerate() {
-        let gpu_area = chunks[index];
+    f.render_widget(tabs, chunks[0]);
+
+    // Render graphs for the selected GPU
+    if let Some(gpu_info) = app_state.gpu_infos.get(app_state.selected_gpu_tab) {
+        let graph_area = chunks[1];
         let gpu_chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(50), Constraint::Percentage(50)].as_ref())
-            .split(gpu_area);
+            .split(graph_area);
 
         // Power graph
-        let power_data: Vec<(f64, f64)> = app_state.power_history[index]
+        let power_data: Vec<(f64, f64)> = app_state.power_history[app_state.selected_gpu_tab]
             .iter()
             .enumerate()
             .map(|(i, &v)| (i as f64, v as f64))
@@ -608,39 +637,18 @@ fn render_gpu_graphs(f: &mut Frame, area: Rect, app_state: &AppState) {
             .data(&power_data);
 
         let power_chart = Chart::new(vec![power_dataset])
-            .block(
-                Block::default()
-                    .title(format!("GPU {} Power", index))
-                    .borders(Borders::ALL),
-            )
-            .x_axis(
-                Axis::default()
-                    .title("Time (s)")
-                    .style(Style::default().fg(Color::Gray))
-                    .bounds([0.0, 60.0])
-                    .labels(
-                        ["0", "15", "30", "45", "60"]
-                            .iter()
-                            .map(|&s| s.to_string())
-                            .collect::<Vec<String>>(),
-                    ),
-            )
+            .block(Block::default().title("Power").borders(Borders::ALL))
+            .x_axis(Axis::default().title("Time (s)").bounds([0.0, 60.0]))
             .y_axis(
                 Axis::default()
                     .title("Power (W)")
-                    .style(Style::default().fg(Color::Gray))
-                    .bounds([0.0, gpu_info.power_limit as f64])
-                    .labels([
-                        format!("{:.0}", 0.0),
-                        format!("{:.0}", gpu_info.power_limit as f64 / 2.0),
-                        format!("{:.0}", gpu_info.power_limit),
-                    ]),
+                    .bounds([0.0, gpu_info.power_limit as f64]),
             );
 
         f.render_widget(power_chart, gpu_chunks[0]);
 
         // Utilization graph
-        let util_data: Vec<(f64, f64)> = app_state.utilization_history[index]
+        let util_data: Vec<(f64, f64)> = app_state.utilization_history[app_state.selected_gpu_tab]
             .iter()
             .enumerate()
             .map(|(i, &v)| (i as f64, v as f64))
@@ -654,34 +662,12 @@ fn render_gpu_graphs(f: &mut Frame, area: Rect, app_state: &AppState) {
             .data(&util_data);
 
         let util_chart = Chart::new(vec![util_dataset])
-            .block(
-                Block::default()
-                    .title(format!("GPU {} Utilization", index))
-                    .borders(Borders::ALL),
-            )
-            .x_axis(
-                Axis::default()
-                    .title("Time (s)")
-                    .style(Style::default().fg(Color::Gray))
-                    .bounds([0.0, 60.0])
-                    .labels(
-                        ["0", "15", "30", "45", "60"]
-                            .iter()
-                            .map(|&s| s.to_string())
-                            .collect::<Vec<String>>(),
-                    ),
-            )
+            .block(Block::default().title("Utilization").borders(Borders::ALL))
+            .x_axis(Axis::default().title("Time (s)").bounds([0.0, 60.0]))
             .y_axis(
                 Axis::default()
                     .title("Utilization (%)")
-                    .style(Style::default().fg(Color::Gray))
-                    .bounds([0.0, 100.0])
-                    .labels(
-                        ["0", "25", "50", "75", "100"]
-                            .iter()
-                            .map(|&s| s.to_string())
-                            .collect::<Vec<String>>(),
-                    ),
+                    .bounds([0.0, 100.0]),
             );
 
         f.render_widget(util_chart, gpu_chunks[1]);
