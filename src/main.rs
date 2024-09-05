@@ -80,6 +80,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 .long("watch")
                 .value_name("MILLISECONDS")
                 .help("Refresh interval in milliseconds")
+                .default_value("100") // Set the default value to "100"
                 .required(false),
         )
         .arg(
@@ -758,7 +759,10 @@ fn render_all_gpu_graphs(f: &mut Frame, area: Rect, app_state: &AppState) {
     if gpu_count > 0 {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints(vec![Constraint::Percentage((100 / gpu_count) as u16); gpu_count])
+            .constraints(vec![
+                Constraint::Percentage((100 / gpu_count) as u16);
+                gpu_count
+            ])
             .split(area);
 
         for (index, _) in app_state.gpu_infos.iter().enumerate() {
