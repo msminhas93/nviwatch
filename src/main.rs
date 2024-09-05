@@ -234,6 +234,17 @@ fn kill_selected_process(app_state: &AppState) -> Result<(), Box<dyn std::error:
     }
 }
 
+fn format_memory_size(bytes: u64) -> String {
+    const GB: u64 = 1024 * 1024 * 1024;
+    const MB: u64 = 1024 * 1024;
+
+    if bytes >= 10 * GB {
+        format!("{:.2}GB", bytes as f64 / GB as f64)
+    } else {
+        format!("{}MB", bytes / MB)
+    }
+}
+
 fn render_gpu_info(f: &mut Frame, area: Rect, gpu_infos: &[GpuInfo]) {
     let block = Block::default().borders(Borders::ALL).title("GPU Info");
     f.render_widget(block.clone(), area);
@@ -310,9 +321,9 @@ fn render_gpu_info(f: &mut Frame, area: Rect, gpu_infos: &[GpuInfo]) {
                 Cell::from(format!("{}%", info.utilization))
                     .style(Style::default().fg(Color::Magenta)),
                 Cell::from(format!(
-                    "{}/{}MB",
-                    info.memory_used / 1_048_576,
-                    info.memory_total / 1_048_576
+                    "{}/{}",
+                    format_memory_size(info.memory_used),
+                    format_memory_size(info.memory_total)
                 ))
                 .style(Style::default().fg(Color::Blue)),
                 Cell::from(format!("{}/{}W", info.power_usage, info.power_limit))
@@ -474,11 +485,10 @@ fn render_process_list(f: &mut Frame, area: Rect, app_state: &AppState) {
             Row::new(vec![
                 Cell::from(gpu_index.to_string()).style(style.fg(Color::Cyan)),
                 Cell::from(process.pid.to_string()).style(style.fg(Color::Yellow)),
-                Cell::from(format!("{}MB", process.used_gpu_memory / 1_048_576))
+                Cell::from(format_memory_size(process.used_gpu_memory))
                     .style(style.fg(Color::Green)),
                 Cell::from(format!("{:.1}%", process.cpu_usage)).style(style.fg(Color::Magenta)),
-                Cell::from(format!("{}MB", process.memory_usage / 1_048_576))
-                    .style(style.fg(Color::Blue)),
+                Cell::from(format_memory_size(process.memory_usage)).style(style.fg(Color::Blue)),
                 Cell::from(process.username.as_str()).style(style.fg(Color::Red)),
                 Cell::from(process.command.as_str()).style(style),
             ])
