@@ -11,11 +11,8 @@ use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
-use std::cmp;
-
 use nix::sys::signal::{kill, Signal};
 use nix::unistd::Pid;
-
 use nix::unistd::{sysconf, SysconfVar};
 use nix::unistd::{Uid, User};
 use nvml::enum_wrappers::device::TemperatureSensor;
@@ -26,9 +23,13 @@ use ratatui::layout::Rect;
 use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::prelude::Alignment;
 use ratatui::style::{Color, Modifier, Style};
+use ratatui::symbols;
+use ratatui::text::Line;
+use ratatui::widgets::{Axis, Chart, Dataset, Tabs};
 use ratatui::widgets::{Block, Borders, Cell, Gauge, Paragraph, Row, Table};
 use ratatui::Frame;
 use ratatui::Terminal;
+use std::cmp;
 use std::error::Error;
 use std::fs;
 use std::io::stdout;
@@ -695,11 +696,6 @@ fn collect_gpu_info(nvml: &Nvml, app_state: &mut AppState) -> Result<Vec<GpuInfo
     Ok(gpu_infos)
 }
 
-use ratatui::symbols;
-use ratatui::text::Line;
-use ratatui::widgets::GraphType;
-use ratatui::widgets::{Axis, Chart, Dataset, Tabs};
-
 fn render_gpu_graphs(f: &mut Frame, area: Rect, app_state: &AppState) {
     if app_state.use_bar_charts {
         render_gpu_bar_charts(f, area, app_state);
@@ -783,18 +779,7 @@ fn render_power_graph(f: &mut Frame, area: Rect, app_state: &AppState, gpu_index
         .style(Style::default().fg(Color::Yellow))
         .data(&power_data);
 
-    let power_limit_data = vec![
-        (0.0, gpu_info.power_limit as f64),
-        (59.0, gpu_info.power_limit as f64),
-    ];
-    let power_limit_dataset = Dataset::default()
-        .name("Power Limit")
-        .marker(symbols::Marker::Braille)
-        .graph_type(GraphType::Line)
-        .style(Style::default().fg(Color::Red))
-        .data(&power_limit_data);
-
-    let power_chart = Chart::new(vec![power_dataset, power_limit_dataset])
+    let power_chart = Chart::new(vec![power_dataset])
         .block(
             Block::default()
                 .title(format!("GPU {} Power", gpu_index))
@@ -809,7 +794,7 @@ fn render_power_graph(f: &mut Frame, area: Rect, app_state: &AppState, gpu_index
                     ["0", "15", "30", "45", "60"]
                         .iter()
                         .map(|&s| s.to_string())
-                        .collect::<Vec<String>>(),
+                        .collect::<Vec<String>>(), // Specify the type here
                 ),
         )
         .y_axis(
@@ -841,16 +826,7 @@ fn render_utilization_graph(f: &mut Frame, area: Rect, app_state: &AppState, gpu
         .style(Style::default().fg(Color::Magenta))
         .data(&util_data);
 
-    // Add a reference line at 100% utilization
-    let util_max_data = vec![(0.0, 100.0), (59.0, 100.0)];
-    let util_max_dataset = Dataset::default()
-        .name("Max Utilization")
-        .marker(symbols::Marker::Braille)
-        .graph_type(GraphType::Line)
-        .style(Style::default().fg(Color::Red))
-        .data(&util_max_data);
-
-    let util_chart = Chart::new(vec![util_dataset, util_max_dataset])
+    let util_chart = Chart::new(vec![util_dataset])
         .block(
             Block::default()
                 .title(format!("GPU {} Utilization", gpu_index))
@@ -865,7 +841,7 @@ fn render_utilization_graph(f: &mut Frame, area: Rect, app_state: &AppState, gpu
                     ["0", "15", "30", "45", "60"]
                         .iter()
                         .map(|&s| s.to_string())
-                        .collect::<Vec<String>>(),
+                        .collect::<Vec<String>>(), // Specify the type here
                 ),
         )
         .y_axis(
@@ -877,7 +853,7 @@ fn render_utilization_graph(f: &mut Frame, area: Rect, app_state: &AppState, gpu
                     ["0", "25", "50", "75", "100"]
                         .iter()
                         .map(|&s| s.to_string())
-                        .collect::<Vec<String>>(),
+                        .collect::<Vec<String>>(), // Specify the type here
                 ),
         );
 
