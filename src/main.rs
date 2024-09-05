@@ -18,6 +18,7 @@ use flexi_logger::{FileSpec, Logger, WriteMode};
 use log::info;
 use nix::sys::signal::{kill, Signal};
 use nix::unistd::Pid;
+
 use nix::unistd::{sysconf, SysconfVar};
 use nix::unistd::{Uid, User};
 use nvml::enum_wrappers::device::TemperatureSensor;
@@ -165,34 +166,40 @@ fn main() -> Result<(), Box<dyn Error>> {
 }
 
 fn kill_selected_process(app_state: &AppState) -> Result<(), Box<dyn std::error::Error>> {
-    let mut process_index = app_state.selected_process;
+    let mut all_processes = Vec::new();
     for gpu_info in &app_state.gpu_infos {
-        if process_index < gpu_info.processes.len() {
-            let pid = gpu_info.processes[process_index].pid;
-            let pid = Pid::from_raw(pid as i32);
-
-            match kill(pid, Signal::SIGTERM) {
-                Ok(_) => return Ok(()),
-                Err(nix::Error::EPERM) => {
-                    return Err(Box::new(IoError::new(
-                        ErrorKind::PermissionDenied,
-                        format!("Permission denied to terminate process {}", pid)
-                    )));
-                },
-                Err(e) => {
-                    return Err(Box::new(IoError::new(
-                        ErrorKind::Other,
-                        format!("Failed to terminate process {}: {}", pid, e)
-                    )));
-                }
-            }
-        }
-        process_index -= gpu_info.processes.len();
+        all_processes.extend(gpu_info.processes.iter());
     }
-    Err(Box::new(IoError::new(
-        ErrorKind::NotFound,
-        "Selected process not found"
-    )))
+
+    // Sort processes by GPU memory usage (descending) to match the UI
+    all_processes.sort_by(|a, b| b.used_gpu_memory.cmp(&a.used_gpu_memory));
+
+    if app_state.selected_process < all_processes.len() {
+        let selected_process = &all_processes[app_state.selected_process];
+        let pid = selected_process.pid;
+        match kill(Pid::from_raw(pid as i32), Signal::SIGTERM) {
+            Ok(_) => Ok(()),
+            Err(nix::Error::EPERM) => Err(Box::new(IoError::new(
+                ErrorKind::PermissionDenied,
+                format!(
+                    "Permission denied to terminate process {} ({})",
+                    pid, selected_process.command
+                ),
+            ))),
+            Err(e) => Err(Box::new(IoError::new(
+                ErrorKind::Other,
+                format!(
+                    "Failed to terminate process {} ({}): {}",
+                    pid, selected_process.command, e
+                ),
+            ))),
+        }
+    } else {
+        Err(Box::new(IoError::new(
+            ErrorKind::NotFound,
+            "Selected process not found",
+        )))
+    }
 }
 
 fn render_gpu_info(f: &mut Frame, area: Rect, gpu_infos: &[GpuInfo]) {
