@@ -754,26 +754,32 @@ fn render_tabbed_gpu_graphs(f: &mut Frame, area: Rect, app_state: &AppState) {
 
 fn render_all_gpu_graphs(f: &mut Frame, area: Rect, app_state: &AppState) {
     let gpu_count = app_state.gpu_infos.len();
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints(vec![
-            Constraint::Percentage((100 / gpu_count) as u16);
-            gpu_count
-        ])
-        .split(area);
 
-    for (index, _) in app_state.gpu_infos.iter().enumerate() {
-        let gpu_area = chunks[index];
-        let gpu_chunks = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)].as_ref())
-            .split(gpu_area);
+    if gpu_count > 0 {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints(vec![Constraint::Percentage((100 / gpu_count) as u16); gpu_count])
+            .split(area);
 
-        render_power_graph(f, gpu_chunks[0], app_state, index);
-        render_utilization_graph(f, gpu_chunks[1], app_state, index);
+        for (index, _) in app_state.gpu_infos.iter().enumerate() {
+            let gpu_area = chunks[index];
+            let gpu_chunks = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Percentage(50), Constraint::Percentage(50)].as_ref())
+                .split(gpu_area);
+
+            render_power_graph(f, gpu_chunks[0], app_state, index);
+            render_utilization_graph(f, gpu_chunks[1], app_state, index);
+        }
+    } else {
+        // Display a message when no GPUs are found
+        let no_gpus_message = "No GPUs found.";
+        let paragraph = Paragraph::new(no_gpus_message)
+            .style(Style::default().fg(Color::Red))
+            .alignment(Alignment::Center);
+        f.render_widget(paragraph, area);
     }
 }
-
 fn render_power_graph(f: &mut Frame, area: Rect, app_state: &AppState, gpu_index: usize) {
     let gpu_info = &app_state.gpu_infos[gpu_index];
     let power_data: Vec<(f64, f64)> = app_state.power_history[gpu_index]
