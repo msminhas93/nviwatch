@@ -11,13 +11,15 @@ extern crate textwrap;
 use clap::{Arg, Command};
 use crossterm::event::{self, Event, KeyCode};
 use crossterm::execute;
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
-use crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen};
+use crossterm::terminal::{
+    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+};
 use flexi_logger::{FileSpec, Logger, WriteMode};
-use log::{debug, info};
+use log::info;
+use nix::unistd::{sysconf, SysconfVar};
 use nix::unistd::{Uid, User};
 use nvml::enum_wrappers::device::TemperatureSensor;
-use nvml::struct_wrappers::device::ProcessInfo;
+use nvml::struct_wrappers::device::ProcessInfo as NvmlProcessInfo;
 use nvml::Nvml;
 use procfs::process::Process;
 use ratatui::backend::CrosstermBackend;
@@ -27,21 +29,46 @@ use ratatui::widgets::{Block, Borders, Cell, Row, Table};
 use ratatui::Terminal;
 use std::collections::HashMap;
 use std::error::Error;
+use std::fs;
 use std::io::stdout;
+use std::time::SystemTime;
 use std::time::{Duration, Instant};
 use textwrap::fill;
 
+struct GpuInfo {
+    index: usize,
+    name: String,
+    temperature: u32,
+    utilization: u32,
+    memory_used: u64,
+    memory_total: u64,
+    processes: Vec<GpuProcessInfo>,
+}
+
+#[derive(Clone)]
+struct GpuProcessInfo {
+    pid: u32,
+    used_gpu_memory: u64,
+    username: String,
+    command: String,
+    cpu_usage: f32,
+    memory_usage: u64,
+}
+
+struct UserMemoryUsage {
+    username: String,
+    memory_usage: u64,
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
-    // Initialize the logger to log to a file
     Logger::try_with_str("debug")?
-        .log_to_file(FileSpec::default()) // Default file specification
+        .log_to_file(FileSpec::default())
         .write_mode(WriteMode::BufferAndFlush)
         .start()?;
 
-    // Parse command-line arguments
     let matches = Command::new("gpu-info-rs")
         .version("0.1.0")
-        .author("Your Name <your.email@example.com>")
+        .author("Your Name")
         .about("Displays GPU information in a tabular format")
         .arg(
             Arg::new("watch")
@@ -53,27 +80,25 @@ fn main() -> Result<(), Box<dyn Error>> {
         )
         .get_matches();
 
-    // Get the watch interval if specified
     let watch_interval = matches
         .get_one::<String>("watch")
-        .map(|s| s.parse::<u64>().expect("Invalid number"))
-        .unwrap_or(1000); // Default to 1 second if not specified
+        .map(|s| s.parse().expect("Invalid number"))
+        .unwrap_or(1000);
 
-    // Initialize NVML
     let nvml = Nvml::init()?;
     info!("Initialized NVML");
 
-    // Set up terminal interface
     let mut stdout = stdout();
     execute!(stdout, EnterAlternateScreen)?;
     enable_raw_mode()?;
+
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
     let mut last_update = Instant::now();
+    let mut gpu_infos = Vec::new();
 
     loop {
-        // Check for 'q' key press
         if event::poll(Duration::from_millis(100))? {
             if let Event::Key(key) = event::read()? {
                 if key.code == KeyCode::Char('q') {
@@ -82,103 +107,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
         }
 
-        // Update only if the watch interval has passed
         if last_update.elapsed() >= Duration::from_millis(watch_interval) {
             last_update = Instant::now();
+            gpu_infos = collect_gpu_info(&nvml)?;
 
-            // Get the number of available devices
-            let device_count = nvml.device_count()?;
-            debug!("Device count: {}", device_count);
-
-            // Create a vector to store GPU information
-            let mut gpu_infos = Vec::new();
-
-            // Loop through all devices
-            for index in 0..device_count {
-                let device = nvml.device_by_index(index)?;
-
-                let name = device.name()?;
-                let temperature = device.temperature(TemperatureSensor::Gpu)?;
-                let utilization = device.utilization_rates()?.gpu;
-                let memory = device.memory_info()?;
-
-                debug!(
-                    "Device {}: {} - Temp: {}°C, Util: {}%, Memory: {}/{}MB",
-                    index,
-                    name,
-                    temperature,
-                    utilization,
-                    memory.used / 1_048_576,
-                    memory.total / 1_048_576
-                );
-
-                // Get the list of compute and graphics processes running on the GPU
-                let compute_processes: Vec<ProcessInfo> = device.running_compute_processes()?;
-                debug!(
-                    "Found {} compute processes on device {}",
-                    compute_processes.len(),
-                    index
-                );
-
-                let graphics_processes: Vec<ProcessInfo> = device.running_graphics_processes()?;
-                debug!(
-                    "Found {} graphics processes on device {}",
-                    graphics_processes.len(),
-                    index
-                );
-
-                let all_processes = [compute_processes, graphics_processes].concat();
-                debug!(
-                    "Total processes on device {}: {}",
-                    index,
-                    all_processes.len()
-                );
-
-                // Aggregate memory usage by user
-                let mut user_memory_map: HashMap<String, u64> = HashMap::new();
-                for process in all_processes {
-                    let pid = process.pid;
-                    let used_memory = match process.used_gpu_memory {
-                        nvml::enums::device::UsedGpuMemory::Used(bytes) => bytes / 1_048_576, // Convert bytes to MB
-                        nvml::enums::device::UsedGpuMemory::Unavailable => 0,
-                    };
-
-                    if let Some(username) = get_user_by_pid(pid) {
-                        *user_memory_map.entry(username.clone()).or_insert(0) += used_memory;
-                        debug!(
-                            "Process {}: User: {}, Memory: {}MB",
-                            pid, username, used_memory
-                        );
-                    } else {
-                        debug!("Could not get username for process {}", pid);
-                    }
-                }
-
-                // Sort users by memory usage in descending order
-                let mut sorted_users: Vec<_> = user_memory_map.into_iter().collect();
-                sorted_users.sort_by(|a, b| b.1.cmp(&a.1));
-
-                // Format user memory usage, including all users
-                let user_memory: String = sorted_users
-                    .iter()
-                    .map(|(user, mem)| format!("{}({}M)", user, mem))
-                    .collect::<Vec<String>>()
-                    .join(" ");
-
-                // Wrap the user memory string to a maximum width that fits your display
-                let wrapped_user_memory = fill(&user_memory, 50); // Adjust width as needed
-
-                gpu_infos.push(vec![
-                    index.to_string(),
-                    name,
-                    format!("{}°C", temperature),
-                    format!("{}%", utilization),
-                    format!("{}/{}MB", memory.used / 1_048_576, memory.total / 1_048_576),
-                    wrapped_user_memory,
-                ]);
-            }
-
-            // Draw the TUI
             terminal.draw(|f| {
                 let size = f.area();
                 let block = Block::default()
@@ -194,22 +126,23 @@ fn main() -> Result<(), Box<dyn Error>> {
                 let rows: Vec<Row> = gpu_infos
                     .iter()
                     .map(|info| {
-                        let cells: Vec<Cell> = info
-                            .iter()
-                            .enumerate()
-                            .map(|(i, c)| {
-                                let style = match i {
-                                    0 => Style::default().fg(Color::Cyan),    // GPU Index
-                                    1 => Style::default().fg(Color::Green),   // Name
-                                    2 => Style::default().fg(Color::Red),     // Temperature
-                                    3 => Style::default().fg(Color::Magenta), // Utilization
-                                    4 => Style::default().fg(Color::Blue),    // Memory
-                                    5 => Style::default().fg(Color::Yellow),  // User Mem
-                                    _ => Style::default(),
-                                };
-                                Cell::from(c.clone()).style(style)
-                            })
-                            .collect();
+                        let cells = vec![
+                            Cell::from(info.index.to_string())
+                                .style(Style::default().fg(Color::Cyan)),
+                            Cell::from(info.name.as_str()).style(Style::default().fg(Color::Green)),
+                            Cell::from(format!("{}°C", info.temperature))
+                                .style(Style::default().fg(Color::Red)),
+                            Cell::from(format!("{}%", info.utilization))
+                                .style(Style::default().fg(Color::Magenta)),
+                            Cell::from(format!(
+                                "{}/{}MB",
+                                info.memory_used / 1_048_576,
+                                info.memory_total / 1_048_576
+                            ))
+                            .style(Style::default().fg(Color::Blue)),
+                            Cell::from(format_process_info(&info.processes))
+                                .style(Style::default().fg(Color::Yellow)),
+                        ];
                         Row::new(cells)
                     })
                     .collect();
@@ -222,7 +155,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                         Constraint::Length(5),
                         Constraint::Length(5),
                         Constraint::Length(20),
-                        Constraint::Length(50), // Increased width for User Mem column
+                        Constraint::Length(100), // Increased width for process info
                     ],
                 )
                 .header(Row::new(vec![
@@ -248,7 +181,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                             .fg(Color::Blue)
                             .add_modifier(Modifier::BOLD),
                     ),
-                    Cell::from("User Mem").style(
+                    Cell::from("Process Info").style(
                         Style::default()
                             .fg(Color::Yellow)
                             .add_modifier(Modifier::BOLD),
@@ -261,12 +194,188 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
-    // Restore the terminal
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()?;
 
     Ok(())
+}
+
+fn get_process_info(pid: u32, used_gpu_memory: u64) -> Option<GpuProcessInfo> {
+    if let Ok(process) = Process::new(pid as i32) {
+        if let Ok(uid) = process.uid() {
+            if let Ok(Some(user)) = User::from_uid(Uid::from_raw(uid)) {
+                let command = process.cmdline().unwrap_or_default().join(" ");
+                let cpu_usage = process
+                    .stat()
+                    .ok()
+                    .and_then(|stat| {
+                        let total_time = stat.utime + stat.stime;
+                        let clock_ticks = get_clock_ticks_per_second();
+                        let uptime = get_system_uptime();
+                        Some((total_time as f64 / clock_ticks as f64 / uptime * 100.0) as f32)
+                    })
+                    .unwrap_or(0.0);
+                let memory_usage = process.stat().ok().map(|stat| stat.rss * 4096).unwrap_or(0);
+
+                return Some(GpuProcessInfo {
+                    pid,
+                    used_gpu_memory,
+                    username: user.name,
+                    command,
+                    cpu_usage,
+                    memory_usage,
+                });
+            }
+        }
+    }
+    None
+}
+
+fn get_clock_ticks_per_second() -> u64 {
+    sysconf(SysconfVar::CLK_TCK)
+        .unwrap()
+        .map(|ticks| ticks as u64)
+        .unwrap_or(100)
+}
+
+fn get_system_uptime() -> f64 {
+    fs::read_to_string("/proc/uptime")
+        .ok()
+        .and_then(|content| content.split_whitespace().next().map(String::from))
+        .and_then(|uptime_str| uptime_str.parse().ok())
+        .unwrap_or(0.0)
+}
+
+fn collect_gpu_info(nvml: &Nvml) -> Result<Vec<GpuInfo>, Box<dyn Error>> {
+    let device_count = nvml.device_count()?;
+    let mut gpu_infos = Vec::new();
+
+    for index in 0..device_count {
+        let device = nvml.device_by_index(index)?;
+        let name = device.name()?;
+        let temperature = device.temperature(TemperatureSensor::Gpu)?;
+        let utilization = device.utilization_rates()?.gpu;
+        let memory = device.memory_info()?;
+
+        let compute_processes: Vec<GpuProcessInfo> = device
+            .running_compute_processes()?
+            .into_iter()
+            .filter_map(|p| {
+                let used_gpu_memory = match p.used_gpu_memory {
+                    nvml::enums::device::UsedGpuMemory::Used(bytes) => bytes,
+                    nvml::enums::device::UsedGpuMemory::Unavailable => 0,
+                };
+                get_process_info(p.pid, used_gpu_memory)
+            })
+            .collect();
+
+        let graphics_processes: Vec<GpuProcessInfo> = device
+            .running_graphics_processes()?
+            .into_iter()
+            .filter_map(|p| {
+                let used_gpu_memory = match p.used_gpu_memory {
+                    nvml::enums::device::UsedGpuMemory::Used(bytes) => bytes,
+                    nvml::enums::device::UsedGpuMemory::Unavailable => 0,
+                };
+                get_process_info(p.pid, used_gpu_memory)
+            })
+            .collect();
+
+        let all_processes = [compute_processes, graphics_processes].concat();
+
+        gpu_infos.push(GpuInfo {
+            index: index as usize,
+            name,
+            temperature,
+            utilization,
+            memory_used: memory.used,
+            memory_total: memory.total,
+            processes: all_processes,
+        });
+    }
+
+    Ok(gpu_infos)
+}
+
+fn process_info_to_struct(process: NvmlProcessInfo) -> Option<GpuProcessInfo> {
+    let used_gpu_memory = match process.used_gpu_memory {
+        nvml::enums::device::UsedGpuMemory::Used(bytes) => bytes,
+        nvml::enums::device::UsedGpuMemory::Unavailable => 0,
+    };
+
+    if let Some(username) = get_user_by_pid(process.pid) {
+        if let Ok(proc) = Process::new(process.pid as i32) {
+            let command = proc.cmdline().unwrap_or_default().join(" ");
+            let cpu_usage = proc
+                .stat()
+                .ok()
+                .and_then(|stat| {
+                    let total_time = stat.utime + stat.stime;
+                    let clock_ticks = get_clock_ticks_per_second();
+                    let uptime = get_system_uptime();
+                    Some((total_time as f64 / clock_ticks as f64 / uptime * 100.0) as f32)
+                })
+                .unwrap_or(0.0);
+            let memory_usage = proc.stat().ok().map(|stat| stat.rss * 4096).unwrap_or(0);
+
+            return Some(GpuProcessInfo {
+                pid: process.pid,
+                used_gpu_memory,
+                username,
+                command,
+                cpu_usage,
+                memory_usage,
+            });
+        }
+    }
+    None
+}
+
+fn format_process_info(processes: &[GpuProcessInfo]) -> String {
+    let mut user_info: HashMap<String, Vec<&GpuProcessInfo>> = HashMap::new();
+
+    for process in processes {
+        user_info
+            .entry(process.username.clone())
+            .or_default()
+            .push(process);
+    }
+
+    let mut sorted_users: Vec<_> = user_info.into_iter().collect();
+    sorted_users.sort_by(|a, b| {
+        let a_mem: u64 = a.1.iter().map(|p| p.used_gpu_memory).sum();
+        let b_mem: u64 = b.1.iter().map(|p| p.used_gpu_memory).sum();
+        b_mem.cmp(&a_mem)
+    });
+
+    let user_info: String = sorted_users
+        .iter()
+        .map(|(user, processes)| {
+            let total_gpu_mem: u64 = processes.iter().map(|p| p.used_gpu_memory).sum();
+            let process_info: String = processes
+                .iter()
+                .map(|p| {
+                    format!(
+                        "{}({:.1}%CPU,{}MB)",
+                        p.pid,
+                        p.cpu_usage,
+                        p.memory_usage / 1_048_576
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(",");
+            format!(
+                "{}({}MB)[{}]",
+                user,
+                total_gpu_mem / 1_048_576,
+                process_info
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    fill(&user_info, 100) // Increased width to accommodate more information
 }
 
 fn get_user_by_pid(pid: u32) -> Option<String> {
