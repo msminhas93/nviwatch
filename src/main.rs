@@ -27,6 +27,7 @@ use procfs::process::Process;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::Rect;
 use ratatui::layout::{Constraint, Direction, Layout};
+use ratatui::prelude::Alignment;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table};
 use ratatui::Frame;
@@ -152,6 +153,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     .direction(Direction::Vertical)
                     .constraints([Constraint::Percentage(30), Constraint::Percentage(70)].as_ref())
                     .split(area);
+
                 render_gpu_info(f, main_layout[0], &app_state.gpu_infos);
                 render_process_list(f, main_layout[1], &app_state);
             })?;
@@ -203,9 +205,7 @@ fn kill_selected_process(app_state: &AppState) -> Result<(), Box<dyn std::error:
 }
 
 fn render_gpu_info(f: &mut Frame, area: Rect, gpu_infos: &[GpuInfo]) {
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title("GPU Info (Press 'q' to quit)");
+    let block = Block::default().borders(Borders::ALL).title("GPU Info");
     f.render_widget(block.clone(), area);
 
     let gpu_area = block.inner(area);
@@ -276,11 +276,19 @@ fn render_gpu_info(f: &mut Frame, area: Rect, gpu_infos: &[GpuInfo]) {
 }
 
 fn render_process_list(f: &mut Frame, area: Rect, app_state: &AppState) {
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(0), Constraint::Length(1)].as_ref())
+        .split(area);
+
+    let main_area = layout[0];
+    let footer_area = layout[1];
+
     let block = Block::default()
         .borders(Borders::ALL)
         .title("GPU Processes");
-    f.render_widget(block.clone(), area);
-    let process_area = block.inner(area);
+    f.render_widget(block.clone(), main_area);
+    let process_area = block.inner(main_area);
 
     let mut all_processes = Vec::new();
     for (gpu_index, gpu_info) in app_state.gpu_infos.iter().enumerate() {
@@ -373,6 +381,16 @@ fn render_process_list(f: &mut Frame, area: Rect, app_state: &AppState) {
     }
 
     f.render_widget(table, process_area);
+    // Render the footer
+    render_footer(f, footer_area);
+}
+
+fn render_footer(f: &mut Frame, area: Rect) {
+    let footer_text = "↑↓ to navigate | x to kill process | q to quit";
+    let footer = Paragraph::new(footer_text)
+        .style(Style::default().fg(Color::Gray))
+        .alignment(Alignment::Center);
+    f.render_widget(footer, area);
 }
 
 fn get_process_info(pid: u32, used_gpu_memory: u64) -> Option<GpuProcessInfo> {
