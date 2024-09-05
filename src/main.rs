@@ -51,6 +51,9 @@ struct GpuInfo {
     utilization: u32,
     memory_used: u64,
     memory_total: u64,
+    power_usage: u32,
+    power_limit: u32,
+    clock_freq: u32,
     processes: Vec<GpuProcessInfo>,
 }
 
@@ -207,8 +210,68 @@ fn kill_selected_process(app_state: &AppState) -> Result<(), Box<dyn std::error:
 fn render_gpu_info(f: &mut Frame, area: Rect, gpu_infos: &[GpuInfo]) {
     let block = Block::default().borders(Borders::ALL).title("GPU Info");
     f.render_widget(block.clone(), area);
-
     let gpu_area = block.inner(area);
+
+    // Calculate maximum widths for each column
+    let max_index_width = gpu_infos
+        .iter()
+        .map(|info| info.index.to_string().len())
+        .max()
+        .unwrap_or(0)
+        .max(3);
+    let max_name_width = gpu_infos
+        .iter()
+        .map(|info| info.name.len())
+        .max()
+        .unwrap_or(0)
+        .max(4);
+    let max_temp_width = gpu_infos
+        .iter()
+        .map(|info| format!("{}°C", info.temperature).len())
+        .max()
+        .unwrap_or(0)
+        .max(4);
+    let max_util_width = gpu_infos
+        .iter()
+        .map(|info| format!("{}%", info.utilization).len())
+        .max()
+        .unwrap_or(0)
+        .max(4);
+    let max_memory_width = gpu_infos
+        .iter()
+        .map(|info| {
+            format!(
+                "{}/{}MB",
+                info.memory_used / 1_048_576,
+                info.memory_total / 1_048_576
+            )
+            .len()
+        })
+        .max()
+        .unwrap_or(0)
+        .max(6);
+    let max_power_width = gpu_infos
+        .iter()
+        .map(|info| format!("{}/{}W", info.power_usage, info.power_limit).len())
+        .max()
+        .unwrap_or(0)
+        .max(5);
+    let max_clock_width = gpu_infos
+        .iter()
+        .map(|info| format!("{}MHz", info.clock_freq).len())
+        .max()
+        .unwrap_or(0)
+        .max(5);
+
+    // Add some padding to each width
+    let index_width = max_index_width + 2;
+    let name_width = max_name_width + 2;
+    let temp_width = max_temp_width + 2;
+    let util_width = max_util_width + 2;
+    let memory_width = max_memory_width + 2;
+    let power_width = max_power_width + 2;
+    let clock_width = max_clock_width + 2;
+
     let rows: Vec<Row> = gpu_infos
         .iter()
         .map(|info| {
@@ -225,6 +288,10 @@ fn render_gpu_info(f: &mut Frame, area: Rect, gpu_infos: &[GpuInfo]) {
                     info.memory_total / 1_048_576
                 ))
                 .style(Style::default().fg(Color::Blue)),
+                Cell::from(format!("{}/{}W", info.power_usage, info.power_limit))
+                    .style(Style::default().fg(Color::Yellow)),
+                Cell::from(format!("{}MHz", info.clock_freq))
+                    .style(Style::default().fg(Color::LightCyan)),
             ];
             Row::new(cells)
         })
@@ -233,11 +300,13 @@ fn render_gpu_info(f: &mut Frame, area: Rect, gpu_infos: &[GpuInfo]) {
     let table = Table::new(
         rows,
         &[
-            Constraint::Length(3),
-            Constraint::Length(30),
-            Constraint::Length(5),
-            Constraint::Length(5),
-            Constraint::Length(20),
+            Constraint::Length(index_width as u16),
+            Constraint::Length(name_width as u16),
+            Constraint::Length(temp_width as u16),
+            Constraint::Length(util_width as u16),
+            Constraint::Length(memory_width as u16),
+            Constraint::Length(power_width as u16),
+            Constraint::Length(clock_width as u16),
         ],
     )
     .header(Row::new(vec![
@@ -262,13 +331,25 @@ fn render_gpu_info(f: &mut Frame, area: Rect, gpu_infos: &[GpuInfo]) {
                 .fg(Color::Blue)
                 .add_modifier(Modifier::BOLD),
         ),
+        Cell::from("Power").style(
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Cell::from("Clock").style(
+            Style::default()
+                .fg(Color::LightCyan)
+                .add_modifier(Modifier::BOLD),
+        ),
     ]))
     .widths(&[
-        Constraint::Length(3),
-        Constraint::Length(30),
-        Constraint::Length(5),
-        Constraint::Length(5),
-        Constraint::Length(20),
+        Constraint::Length(index_width as u16),
+        Constraint::Length(name_width as u16),
+        Constraint::Length(temp_width as u16),
+        Constraint::Length(util_width as u16),
+        Constraint::Length(memory_width as u16),
+        Constraint::Length(power_width as u16),
+        Constraint::Length(clock_width as u16),
     ])
     .column_spacing(1);
 
@@ -450,6 +531,10 @@ fn collect_gpu_info(nvml: &Nvml) -> Result<Vec<GpuInfo>, Box<dyn Error>> {
         let utilization = device.utilization_rates()?.gpu;
         let memory = device.memory_info()?;
 
+        let power_usage = device.power_usage()? / 1000; // Convert mW to W
+        let power_limit = device.enforced_power_limit()? / 1000; // Convert mW to W
+        let clock_freq = device.clock_info(nvml::enum_wrappers::device::Clock::Graphics)?;
+
         let compute_processes: Vec<GpuProcessInfo> = device
             .running_compute_processes()?
             .into_iter()
@@ -474,8 +559,6 @@ fn collect_gpu_info(nvml: &Nvml) -> Result<Vec<GpuInfo>, Box<dyn Error>> {
             })
             .collect();
 
-        let all_processes = [compute_processes, graphics_processes].concat();
-
         gpu_infos.push(GpuInfo {
             index: index as usize,
             name,
@@ -483,7 +566,10 @@ fn collect_gpu_info(nvml: &Nvml) -> Result<Vec<GpuInfo>, Box<dyn Error>> {
             utilization,
             memory_used: memory.used,
             memory_total: memory.total,
-            processes: all_processes,
+            power_usage,
+            power_limit,
+            clock_freq,
+            processes: [compute_processes, graphics_processes].concat(),
         });
     }
 
