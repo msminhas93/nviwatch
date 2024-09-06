@@ -6,25 +6,20 @@ on:
       release_tag:
         description: 'Release tag (e.g., v1.0.0)'
         required: true
-        default: 'v0.1.0'
-
+        
 permissions:
   contents: write # Required for creating releases and uploading assets
 
 jobs:
   build-and-release:
-    runs-on: ubuntu-latest
-    container:
-      image: nvidia/cuda:11.8.0-devel-ubuntu22.04
-      options: --gpus all
-    
+    runs-on: ubuntu-22.04-gpu
     steps:
     - uses: actions/checkout@v3
 
     - name: Install dependencies
       run: |
-        apt-get update
-        apt-get install -y curl build-essential
+        sudo apt-get update
+        sudo apt-get install -y curl build-essential
 
     - name: Install Rust
       uses: actions-rs/toolchain@v1
