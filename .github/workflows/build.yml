@@ -8,7 +8,7 @@ on:
         required: true
         
 permissions:
-  contents: write # Required for creating releases and uploading assets
+  contents: write
 
 jobs:
   build-and-release:
@@ -20,8 +20,8 @@ jobs:
 
     - name: Install dependencies
       run: |
-        sudo apt-get update
-        sudo apt-get install -y curl build-essential
+        apt-get update
+        apt-get install -y curl build-essential
 
     - name: Install Rust
       uses: actions-rs/toolchain@v1
