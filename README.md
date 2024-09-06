@@ -56,6 +56,7 @@ To build and run NviWatch, ensure you have Rust and Cargo installed on your syst
    chmod +x ./target/release/nviwatch
    ./target/release/nviwatch
    ```
+   Note: You can also download the binary from the release page. And follow these steps if you don't want to build from source.
 
 ## Usage
 
