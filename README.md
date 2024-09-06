@@ -1,6 +1,7 @@
 - [NviWatch](#nviwatch)
+  - [Demo](#demo)
   - [Default Mode](#default-mode)
-  - [Bar Mode -](#bar-mode--)
+  - [Bar Mode](#bar-mode)
   - [Tabbed Mode: GPU graphs in tabs for multi GPU nodes](#tabbed-mode-gpu-graphs-in-tabs-for-multi-gpu-nodes)
   - [Features](#features)
   - [Installation](#installation)
@@ -22,7 +23,7 @@ https://github.com/user-attachments/assets/176565fe-4467-4129-b783-071543c52bf4
 ## Default Mode 
 ![](assets/default_mode.png)
 
-## Bar Mode - 
+## Bar Mode
 ![](assets/bar_mode.png)
 
 ## Tabbed Mode: GPU graphs in tabs for multi GPU nodes
