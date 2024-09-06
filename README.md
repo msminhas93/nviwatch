@@ -1,4 +1,7 @@
 - [NviWatch](#nviwatch)
+  - [Default Mode](#default-mode)
+  - [Bar Mode -](#bar-mode--)
+  - [Tabbed Mode: GPU graphs in tabs for multi GPU nodes](#tabbed-mode-gpu-graphs-in-tabs-for-multi-gpu-nodes)
   - [Features](#features)
   - [Installation](#installation)
   - [Usage](#usage)
@@ -11,6 +14,15 @@
 # NviWatch
 
 NviWatch is an interactive terminal user interface (TUI) application for monitoring NVIDIA GPU devices and processes. Built with Rust, it provides real-time insights into GPU performance metrics, including temperature, utilization, memory usage, and power consumption.
+
+## Default Mode 
+![](assets/default_mode.png)
+
+## Bar Mode - 
+![](assets/bar_mode.png)
+
+## Tabbed Mode: GPU graphs in tabs for multi GPU nodes
+![](assets/tabbed_mode.png)
 
 ## Features
 
