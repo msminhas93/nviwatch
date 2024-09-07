@@ -20,10 +20,10 @@ use std::error::Error;
 use std::io::stdout;
 use std::time::{Duration, Instant};
 fn main() -> Result<(), Box<dyn Error>> {
-    let matches = Command::new("gpu-info-rs")
+    let matches = Command::new("nviwatch")
         .version("0.1.0")
-        .author("Your Name")
-        .about("Displays GPU information in a tabular format")
+        .author("Manpreet Singh")
+        .about("NviWatch: A blazingly fast rust based TUI for managing and monitoring NVIDIA GPU processes")
         .arg(
             Arg::new("watch")
                 .short('w')
