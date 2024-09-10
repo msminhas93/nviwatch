@@ -6,7 +6,8 @@
   - [Features](#features)
   - [Installing and Using the Tool](#installing-and-using-the-tool)
     - [Option 1: Download Pre-built Binary](#option-1-download-pre-built-binary)
-    - [Option 2: Build from Source](#option-2-build-from-source)
+    - [Option 2: Install via Cargo](#option-2-install-via-cargo)
+    - [Option 3: Build from Source](#option-3-build-from-source)
   - [Usage](#usage)
   - [Key Bindings](#key-bindings)
   - [License](#license)
@@ -57,7 +58,23 @@ https://github.com/user-attachments/assets/176565fe-4467-4129-b783-071543c52bf4
    ./nviwatch
    ```
 
-### Option 2: Build from Source
+### Option 2: Install via Cargo
+
+If you have Rust and Cargo installed on your system, you can easily install NviWatch directly from crates.io:
+
+1. Open a terminal and run the following command:
+   ```bash
+   cargo install nviwatch
+   ```
+
+2. Once the installation is complete, you can run NviWatch from anywhere in your terminal:
+   ```bash
+   nviwatch
+   ```
+
+Note: Ensure you have the NVIDIA Management Library (NVML) available on your system before running NviWatch.
+
+### Option 3: Build from Source
 
 To build and run NviWatch, ensure you have Rust and Cargo installed on your system. You will also need the NVIDIA Management Library (NVML) available.
 
@@ -77,7 +94,6 @@ To build and run NviWatch, ensure you have Rust and Cargo installed on your syst
    chmod +x ./target/release/nviwatch
    ./target/release/nviwatch
    ```
-   Note: You can also download the binary from the release page. And follow these steps if you don't want to build from source.
 
 ## Usage
 

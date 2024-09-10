@@ -2,6 +2,17 @@
 name = "nviwatch"
 version = "0.1.0"
 edition = "2021"
+description = "A blazingly fast Rust-based TUI for managing and monitoring NVIDIA GPU processes"
+license = "GPL-3.0"
+authors = ["Manpreet Singh Minhas <msminhas@uwaterloo.ca>"]
+repository = "https://github.com/msminhas93/nviwatch"
+homepage = "https://github.com/msminhas93/nviwatch"
+documentation = "https://github.com/msminhas93/nviwatch#readme"
+readme = "README.md"
+keywords = ["nvidia", "gpu", "monitoring", "tui", "system-monitor"]
+categories = ["command-line-utilities", "visualization", "hardware-support"]
+
+
 
 [dependencies]
 clap = "4.5.17"
