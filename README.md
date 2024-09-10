@@ -4,7 +4,9 @@
   - [Bar Mode](#bar-mode)
   - [Tabbed Mode: GPU graphs in tabs for multi GPU nodes](#tabbed-mode-gpu-graphs-in-tabs-for-multi-gpu-nodes)
   - [Features](#features)
-  - [Installation](#installation)
+  - [Installing and Using the Tool](#installing-and-using-the-tool)
+    - [Option 1: Download Pre-built Binary](#option-1-download-pre-built-binary)
+    - [Option 2: Build from Source](#option-2-build-from-source)
   - [Usage](#usage)
   - [Key Bindings](#key-bindings)
   - [License](#license)
@@ -36,7 +38,26 @@ https://github.com/user-attachments/assets/176565fe-4467-4129-b783-071543c52bf4
 - **Graphical Display**: Visualize GPU performance metrics using bar charts and tabbed graphs.
 - **Customizable Refresh Rate**: Set the refresh interval for updating GPU metrics.
 
-## Installation
+## Installing and Using the Tool
+
+### Option 1: Download Pre-built Binary
+
+1. Go to the project's GitHub repository.
+2. Navigate to the "Releases" section.
+3. Download the latest binary release for linux.
+4. Once downloaded, open a terminal and navigate to the directory containing the downloaded binary.
+5. Make the binary executable with the following command:
+   ```
+   chmod +x nviwatch
+   ```
+
+6. You can now run the tool using:
+
+   ```
+   ./nviwatch
+   ```
+
+### Option 2: Build from Source
 
 To build and run NviWatch, ensure you have Rust and Cargo installed on your system. You will also need the NVIDIA Management Library (NVML) available.
 
