@@ -123,7 +123,7 @@ To build and run NviWatch, ensure you have Rust and Cargo installed on your syst
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/yourusername/nviwatch.git
+   git clone https://github.com/msminhas93/nviwatch.git
    cd nviwatch
    ```
 
