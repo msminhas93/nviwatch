@@ -116,17 +116,25 @@ fn main() -> Result<(), Box<dyn Error>> {
                             app_state.selected_gpu_tab += 1;
                         }
                     }
-                    KeyCode::Char('x') => {
-                        match kill_selected_process(&app_state) {
-                            Ok(_) => {
-                                // Refresh the process list immediately after killing a process
-                                app_state.gpu_infos = collect_gpu_info(&nvml, &mut app_state)?;
-                            }
-                            Err(e) => {
-                                // Store the error message to display it in the UI
-                                app_state.error_message = Some(e.to_string());
-                            }
+                    KeyCode::Char('x') => match kill_selected_process(&app_state) {
+                        Ok(_) => {
+                            app_state.gpu_infos = collect_gpu_info(&nvml, &mut app_state)?;
                         }
+                        Err(e) => {
+                            app_state.error_message = Some(e.to_string());
+                        }
+                    },
+                    KeyCode::Char('d') => {
+                        app_state.use_tabbed_graphs = false;
+                        app_state.use_bar_charts = false;
+                    }
+                    KeyCode::Char('t') => {
+                        app_state.use_tabbed_graphs = true;
+                        app_state.use_bar_charts = false;
+                    }
+                    KeyCode::Char('b') => {
+                        app_state.use_tabbed_graphs = false;
+                        app_state.use_bar_charts = true;
                     }
                     _ => {}
                 }
