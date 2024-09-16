@@ -9,13 +9,19 @@ use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table};
 use ratatui::Frame;
 
 pub fn ui(f: &mut Frame, app_state: &AppState) {
+    let num_gpus = app_state.gpu_infos.len();
+    let gpu_info_percentage = {
+        let base_percentage = num_gpus as u16 * 5;
+        base_percentage.clamp(10, 20)
+    };
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints(
             [
-                Constraint::Percentage(20),
-                Constraint::Percentage(30),
-                Constraint::Percentage(50),
+                Constraint::Percentage(gpu_info_percentage),
+                Constraint::Percentage(40),
+                Constraint::Min(0),
             ]
             .as_ref(),
         )
@@ -25,6 +31,7 @@ pub fn ui(f: &mut Frame, app_state: &AppState) {
     render_gpu_graphs(f, chunks[1], app_state);
     render_process_list(f, chunks[2], app_state);
 }
+
 pub fn render_gpu_info(f: &mut Frame, area: Rect, gpu_infos: &[GpuInfo]) {
     let block = Block::default().borders(Borders::ALL).title("GPU Info");
     f.render_widget(block.clone(), area);

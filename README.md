@@ -4,9 +4,6 @@
     - [Benchmark Results](#benchmark-results)
     - [Installation Size Comparison](#installation-size-comparison)
     - [Analysis](#analysis)
-  - [Default Mode](#default-mode)
-  - [Bar Mode](#bar-mode)
-  - [Tabbed Mode: GPU graphs in tabs for multi GPU nodes](#tabbed-mode-gpu-graphs-in-tabs-for-multi-gpu-nodes)
   - [Features](#features)
   - [Installing and Using the Tool](#installing-and-using-the-tool)
     - [Option 1: Download Pre-built Binary](#option-1-download-pre-built-binary)
@@ -14,6 +11,11 @@
     - [Option 3: Build from Source](#option-3-build-from-source)
   - [Usage](#usage)
   - [Key Bindings](#key-bindings)
+  - [View Modes](#view-modes)
+    - [1. Default Mode](#1-default-mode)
+    - [2. Bar Mode](#2-bar-mode)
+    - [3. Tabbed Mode: GPU graphs in tabs for multi GPU nodes](#3-tabbed-mode-gpu-graphs-in-tabs-for-multi-gpu-nodes)
+  - [Star History](#star-history)
   - [License](#license)
   - [Contributing](#contributing)
   - [Acknowledgments](#acknowledgments)
@@ -65,15 +67,6 @@ We used [python-package-size](https://github.com/qertoip/python-package-size) fo
 - **Consistency**: nviwatch maintains consistent memory usage throughout its operation, as indicated by the identical mean and max values for memory usage.
 
 - **Package Size**: At 1.98 MB, nviwatch offers a balanced package size. It's significantly smaller than nvitop (4.1 MB) and gpustat (3.7 MB), while being significantly larger than nvtop (106 KB).
-
-## Default Mode 
-![](assets/default_mode.png)
-
-## Bar Mode
-![](assets/bar_mode.png)
-
-## Tabbed Mode: GPU graphs in tabs for multi GPU nodes
-![](assets/tabbed_mode.png)
 
 ## Features
 
@@ -153,10 +146,34 @@ Example:
 
 ## Key Bindings
 
-- **q**: Quit the application.
-- **↑/↓**: Navigate through the list of processes.
-- **←/→**: Switch between GPU tabs (when using tabbed graphs).
-- **x**: Terminate the selected process.
+- **q**: Quit the application
+- **↑/↓**: Navigate through the list of processes
+- **←/→**: Switch between GPU tabs (when using tabbed graphs)
+- **x**: Terminate the selected process
+- **d**: Switch to default view mode
+- **t**: Switch to tabbed graphs view mode
+- **b**: Switch to bar charts view mode
+
+## View Modes
+
+The application supports three different view modes:
+### 1. Default Mode 
+Shows all GPU information in a single view
+![](assets/default_mode.png)
+
+### 2. Bar Mode
+Presents GPU information using bar charts
+![](assets/bar_mode.png)
+
+### 3. Tabbed Mode: GPU graphs in tabs for multi GPU nodes
+Displays GPU graphs in a tabbed interface
+![](assets/tabbed_mode.png)
+
+You can switch between these modes at any time using the corresponding key bindings.
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=msminhas93/nviwatch&type=Date)](https://star-history.com/#msminhas93/nviwatch&Date)
 
 ## License
 

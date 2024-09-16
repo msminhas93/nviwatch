@@ -74,12 +74,13 @@ pub fn render_tabbed_gpu_graphs(f: &mut Frame, area: Rect, app_state: &AppState)
 
 pub fn render_footer(f: &mut Frame, area: Rect, app_state: &AppState) {
     let footer_text = if app_state.use_tabbed_graphs {
-        "↑↓ to navigate processes | ←→ to switch GPU tabs | x to kill process | q to quit"
+        "↑↓: nav processes | ←→: switch GPU tabs | x: kill process | d: default mode | b: bar mode | q: quit"
     } else if app_state.use_bar_charts {
-        "↑↓ to navigate processes | x to kill process | q to quit"
+        "↑↓: nav processes | x: kill process | d: default mode | t: tabbed mode | q: quit"
     } else {
-        "↑↓ to navigate processes | x to kill process | q to quit"
+        "↑↓: nav processes | x: kill process | b: bar mode | t: tabbed mode | q: quit"
     };
+
     let footer = Paragraph::new(footer_text)
         .style(Style::default().fg(Color::Gray))
         .alignment(Alignment::Center);
