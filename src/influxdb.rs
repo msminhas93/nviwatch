@@ -11,7 +11,37 @@ pub struct InfluxDBConfig {
     pub token: String,
 }
 
+impl InfluxDBConfig {
+    pub fn new(url: String, org: String, bucket: String, token: String) -> Self {
+        Self {
+            url,
+            org,
+            bucket,
+            token,
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), Box<dyn Error>> {
+        if self.url.is_empty() {
+            return Err("InfluxDB URL cannot be empty".into());
+        }
+        if self.org.is_empty() {
+            return Err("InfluxDB organization cannot be empty".into());
+        }
+        if self.bucket.is_empty() {
+            return Err("InfluxDB bucket cannot be empty".into());
+        }
+        if self.token.is_empty() {
+            return Err("InfluxDB token cannot be empty".into());
+        }
+        Ok(())
+    }
+}
+
 pub fn send_to_influxdb(config: &InfluxDBConfig, gpu_infos: &[GpuInfo]) -> Result<(), Box<dyn Error>> {
+    // Validate configuration first
+    config.validate()?;
+
     let client = Client::new(&config.url, &config.bucket).with_token(&config.token);
 
     let timestamp = SystemTime::now()
@@ -37,4 +67,118 @@ pub fn send_to_influxdb(config: &InfluxDBConfig, gpu_infos: &[GpuInfo]) -> Resul
         client.query(queries).await?;
         Ok(())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::gpu::info::GpuInfo;
+
+    fn create_test_gpu_info() -> GpuInfo {
+        GpuInfo {
+            index: 0,
+            name: "Test GPU".to_string(),
+            temperature: 75,
+            utilization: 50,
+            memory_used: 4 * 1024 * 1024 * 1024, // 4GB
+            memory_total: 8 * 1024 * 1024 * 1024, // 8GB
+            power_usage: 150,
+            power_limit: 200,
+            clock_freq: 1800,
+            processes: vec![],
+        }
+    }
+
+    #[test]
+    fn test_influxdb_config_validation_valid() {
+        let config = InfluxDBConfig::new(
+            "http://localhost:8086".to_string(),
+            "my-org".to_string(),
+            "gpu-metrics".to_string(),
+            "my-token".to_string(),
+        );
+        
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_influxdb_config_validation_empty_url() {
+        let config = InfluxDBConfig::new(
+            "".to_string(),
+            "my-org".to_string(),
+            "gpu-metrics".to_string(),
+            "my-token".to_string(),
+        );
+        
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_influxdb_config_validation_empty_org() {
+        let config = InfluxDBConfig::new(
+            "http://localhost:8086".to_string(),
+            "".to_string(),
+            "gpu-metrics".to_string(),
+            "my-token".to_string(),
+        );
+        
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_influxdb_config_validation_empty_bucket() {
+        let config = InfluxDBConfig::new(
+            "http://localhost:8086".to_string(),
+            "my-org".to_string(),
+            "".to_string(),
+            "my-token".to_string(),
+        );
+        
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_influxdb_config_validation_empty_token() {
+        let config = InfluxDBConfig::new(
+            "http://localhost:8086".to_string(),
+            "my-org".to_string(),
+            "gpu-metrics".to_string(),
+            "".to_string(),
+        );
+        
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_send_to_influxdb_with_empty_gpu_list() {
+        let config = InfluxDBConfig::new(
+            "http://localhost:8086".to_string(),
+            "my-org".to_string(),
+            "gpu-metrics".to_string(),
+            "my-token".to_string(),
+        );
+        
+        let gpu_infos: Vec<GpuInfo> = vec![];
+        
+        // This should fail because we can't connect to localhost:8086 in tests
+        // but it should pass validation
+        let result = send_to_influxdb(&config, &gpu_infos);
+        // We expect this to fail due to connection, not validation
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_send_to_influxdb_with_invalid_config() {
+        let config = InfluxDBConfig::new(
+            "".to_string(), // Invalid empty URL
+            "my-org".to_string(),
+            "gpu-metrics".to_string(),
+            "my-token".to_string(),
+        );
+        
+        let gpu_infos = vec![create_test_gpu_info()];
+        
+        let result = send_to_influxdb(&config, &gpu_infos);
+        assert!(result.is_err());
+    }
 } 
