@@ -93,7 +93,7 @@ pub fn collect_gpu_info(
         }
 
         gpu_infos.push(GpuInfo {
-            index: index as usize,
+            index,
             name,
             temperature,
             utilization,

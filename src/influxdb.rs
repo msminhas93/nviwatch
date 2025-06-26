@@ -12,15 +12,6 @@ pub struct InfluxDBConfig {
 }
 
 impl InfluxDBConfig {
-    pub fn new(url: String, org: String, bucket: String, token: String) -> Self {
-        Self {
-            url,
-            org,
-            bucket,
-            token,
-        }
-    }
-
     pub fn validate(&self) -> Result<(), Box<dyn Error>> {
         if self.url.is_empty() {
             return Err("InfluxDB URL cannot be empty".into());
@@ -91,72 +82,72 @@ mod tests {
 
     #[test]
     fn test_influxdb_config_validation_valid() {
-        let config = InfluxDBConfig::new(
-            "http://localhost:8086".to_string(),
-            "my-org".to_string(),
-            "gpu-metrics".to_string(),
-            "my-token".to_string(),
-        );
+        let config = InfluxDBConfig {
+            url: "http://localhost:8086".to_string(),
+            org: "my-org".to_string(),
+            bucket: "gpu-metrics".to_string(),
+            token: "my-token".to_string(),
+        };
         
         assert!(config.validate().is_ok());
     }
 
     #[test]
     fn test_influxdb_config_validation_empty_url() {
-        let config = InfluxDBConfig::new(
-            "".to_string(),
-            "my-org".to_string(),
-            "gpu-metrics".to_string(),
-            "my-token".to_string(),
-        );
+        let config = InfluxDBConfig {
+            url: "".to_string(),
+            org: "my-org".to_string(),
+            bucket: "gpu-metrics".to_string(),
+            token: "my-token".to_string(),
+        };
         
         assert!(config.validate().is_err());
     }
 
     #[test]
     fn test_influxdb_config_validation_empty_org() {
-        let config = InfluxDBConfig::new(
-            "http://localhost:8086".to_string(),
-            "".to_string(),
-            "gpu-metrics".to_string(),
-            "my-token".to_string(),
-        );
+        let config = InfluxDBConfig {
+            url: "http://localhost:8086".to_string(),
+            org: "".to_string(),
+            bucket: "gpu-metrics".to_string(),
+            token: "my-token".to_string(),
+        };
         
         assert!(config.validate().is_err());
     }
 
     #[test]
     fn test_influxdb_config_validation_empty_bucket() {
-        let config = InfluxDBConfig::new(
-            "http://localhost:8086".to_string(),
-            "my-org".to_string(),
-            "".to_string(),
-            "my-token".to_string(),
-        );
+        let config = InfluxDBConfig {
+            url: "http://localhost:8086".to_string(),
+            org: "my-org".to_string(),
+            bucket: "".to_string(),
+            token: "my-token".to_string(),
+        };
         
         assert!(config.validate().is_err());
     }
 
     #[test]
     fn test_influxdb_config_validation_empty_token() {
-        let config = InfluxDBConfig::new(
-            "http://localhost:8086".to_string(),
-            "my-org".to_string(),
-            "gpu-metrics".to_string(),
-            "".to_string(),
-        );
+        let config = InfluxDBConfig {
+            url: "http://localhost:8086".to_string(),
+            org: "my-org".to_string(),
+            bucket: "gpu-metrics".to_string(),
+            token: "".to_string(),
+        };
         
         assert!(config.validate().is_err());
     }
 
     #[test]
     fn test_send_to_influxdb_with_empty_gpu_list() {
-        let config = InfluxDBConfig::new(
-            "http://localhost:8086".to_string(),
-            "my-org".to_string(),
-            "gpu-metrics".to_string(),
-            "my-token".to_string(),
-        );
+        let config = InfluxDBConfig {
+            url: "http://localhost:8086".to_string(),
+            org: "my-org".to_string(),
+            bucket: "gpu-metrics".to_string(),
+            token: "my-token".to_string(),
+        };
         
         let gpu_infos: Vec<GpuInfo> = vec![];
         
@@ -169,12 +160,12 @@ mod tests {
 
     #[test]
     fn test_send_to_influxdb_with_invalid_config() {
-        let config = InfluxDBConfig::new(
-            "".to_string(), // Invalid empty URL
-            "my-org".to_string(),
-            "gpu-metrics".to_string(),
-            "my-token".to_string(),
-        );
+        let config = InfluxDBConfig {
+            url: "".to_string(), // Invalid empty URL
+            org: "my-org".to_string(),
+            bucket: "gpu-metrics".to_string(),
+            token: "my-token".to_string(),
+        };
         
         let gpu_infos = vec![create_test_gpu_info()];
         

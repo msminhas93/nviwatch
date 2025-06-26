@@ -167,7 +167,7 @@ pub fn render_gpu_info(f: &mut Frame, area: Rect, gpu_infos: &[GpuInfo]) {
                 .add_modifier(Modifier::BOLD),
         ),
     ]))
-    .widths(&[
+    .widths([
         Constraint::Length(index_width as u16),
         Constraint::Length(name_width as u16),
         Constraint::Length(temp_width as u16),
@@ -286,5 +286,5 @@ pub fn render_process_list(f: &mut Frame, area: Rect, app_state: &AppState) {
 
     f.render_widget(table, process_area);
     // Render the footer
-    render_footer(f, footer_area, &app_state);
+    render_footer(f, footer_area, app_state);
 }

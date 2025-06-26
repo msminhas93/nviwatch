@@ -16,11 +16,11 @@ pub fn get_process_info(pid: u32, used_gpu_memory: u64) -> Option<GpuProcessInfo
                 let cpu_usage = process
                     .stat()
                     .ok()
-                    .and_then(|stat| {
+                    .map(|stat| {
                         let total_time = stat.utime + stat.stime;
                         let clock_ticks = get_clock_ticks_per_second();
                         let uptime = get_system_uptime();
-                        Some((total_time as f64 / clock_ticks as f64 / uptime * 100.0) as f32)
+                        (total_time as f64 / clock_ticks as f64 / uptime * 100.0) as f32
                     })
                     .unwrap_or(0.0);
                 let memory_usage = process.stat().ok().map(|stat| stat.rss * 4096).unwrap_or(0);
