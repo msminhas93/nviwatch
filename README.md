@@ -142,8 +142,10 @@ nviwatch \
 The included dashboard provides:
 - **Memory Utilization**: Real-time GPU memory usage tracking
 - **GPU Utilization**: Performance utilization percentage over time
-- **Temperature**: GPU temperature monitoring with alerts
+- **Temperature**: GPU temperature monitoring
 - **Power Usage**: Power consumption tracking in watts
+
+![InfluxDB Dashboard](assets/influxdb_dashboard.png)
 
 ### Custom Configuration
 
