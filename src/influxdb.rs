@@ -37,4 +37,4 @@ pub fn send_to_influxdb(config: &InfluxDBConfig, gpu_infos: &[GpuInfo]) -> Resul
         client.query(queries).await?;
         Ok(())
     })
-}
+} 

@@ -1,13 +1,13 @@
 mod app_state;
 mod gpu;
-mod telemetry;
+mod influxdb;
 mod ui;
 mod utils;
 
 extern crate nvml_wrapper as nvml;
 
 use crate::gpu::info::collect_gpu_info;
-use crate::telemetry::{send_to_influxdb, InfluxDBConfig};
+use crate::influxdb::{send_to_influxdb, InfluxDBConfig};
 use crate::ui::render::ui;
 use crate::utils::system::kill_selected_process;
 use app_state::AppState;
@@ -174,6 +174,18 @@ fn main() -> Result<(), Box<dyn Error>> {
                         if let Err(e) = kill_selected_process(&app_state) {
                             app_state.error_message = Some(e.to_string());
                         }
+                    }
+                    KeyCode::Char('d') => {
+                        app_state.use_tabbed_graphs = false;
+                        app_state.use_bar_charts = false;
+                    }
+                    KeyCode::Char('t') => {
+                        app_state.use_tabbed_graphs = true;
+                        app_state.use_bar_charts = false;
+                    }
+                    KeyCode::Char('b') => {
+                        app_state.use_tabbed_graphs = false;
+                        app_state.use_bar_charts = true;
                     }
                     _ => {}
                 }
