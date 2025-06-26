@@ -8,10 +8,52 @@ INFLUX_PASSWORD="password12345"
 INFLUX_ORG="my-org"
 INFLUX_BUCKET="gpu-metrics"
 INFLUX_RETENTION="7d" # Data retention period
-DASHBOARD_TEMPLATE_FILE="gpu_dashboard_template.json"
+DASHBOARD_TEMPLATE_FILE="config/gpu_dashboard_template.json"
 
 # Exit immediately if a command exits with a non-zero status.
 set -e
+
+echo "--- Checking InfluxDB Status ---"
+
+# Check if InfluxDB is already installed and configured
+if command -v influx >/dev/null 2>&1; then
+    echo "InfluxDB CLI is installed."
+    
+    # Check if InfluxDB service is running
+    if systemctl is-active --quiet influxdb 2>/dev/null || service influxdb status >/dev/null 2>&1; then
+        echo "InfluxDB service is running."
+        
+        # Check if we can connect and if the organization exists
+        if influx ping >/dev/null 2>&1 && influx org list | grep -q "${INFLUX_ORG}" 2>/dev/null; then
+            echo "InfluxDB is already configured with organization '${INFLUX_ORG}'."
+            echo "Checking if dashboard already exists..."
+            
+            # Check if the dashboard already exists
+            if influx dashboards | grep -q "GPU metrics" 2>/dev/null; then
+                echo "Dashboard 'GPU metrics' already exists."
+                echo
+                echo "=== SETUP SKIPPED ==="
+                echo "InfluxDB is already fully configured and ready to use."
+                echo
+                echo "To get your admin token, run:"
+                echo "influx auth list"
+                echo
+                echo "Access the InfluxDB dashboard at: http://localhost:8086"
+                echo "Username: ${INFLUX_USERNAME}"
+                echo "Password: ${INFLUX_PASSWORD}"
+                exit 0
+            else
+                echo "Dashboard not found. Will import dashboard template."
+            fi
+        else
+            echo "InfluxDB is installed but not configured. Proceeding with setup..."
+        fi
+    else
+        echo "InfluxDB service is not running. Proceeding with installation..."
+    fi
+else
+    echo "InfluxDB CLI not found. Proceeding with installation..."
+fi
 
 echo "--- Starting InfluxDB Installation ---"
 
@@ -55,22 +97,22 @@ else
     influx setup --username "${INFLUX_USERNAME}" --password "${INFLUX_PASSWORD}" --org "${INFLUX_ORG}" --bucket "${INFLUX_BUCKET}" --retention "${INFLUX_RETENTION}" --force
 fi
 
-# 5. Move and import the dashboard template
-WINDOWS_USER_PATH="/home/msm/code/nviwatch"
-
+# 5. Import the dashboard template
 echo "--- Importing Dashboard Template ---"
-if [ -f "${WINDOWS_USER_PATH}/${DASHBOARD_TEMPLATE_FILE}" ]; then
-    # Move the template from Windows to WSL
-    mv "${WINDOWS_USER_PATH}/${DASHBOARD_TEMPLATE_FILE}" "/home/msm/${DASHBOARD_TEMPLATE_FILE}"
-    
+
+# Get the directory where this script is located
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DASHBOARD_TEMPLATE_PATH="${SCRIPT_DIR}/${DASHBOARD_TEMPLATE_FILE}"
+
+if [ -f "${DASHBOARD_TEMPLATE_PATH}" ]; then
     # Apply the dashboard template (ignore errors if dashboard already exists)
-    if influx apply --file "/home/msm/${DASHBOARD_TEMPLATE_FILE}" --org "${INFLUX_ORG}" --force yes 2>/dev/null; then
+    if influx apply --file "${DASHBOARD_TEMPLATE_PATH}" --org "${INFLUX_ORG}" --force yes 2>/dev/null; then
         echo "Dashboard imported successfully."
     else
         echo "Dashboard already exists or import failed. Continuing..."
     fi
 else
-    echo "WARNING: Dashboard template ${WINDOWS_USER_PATH}/${DASHBOARD_TEMPLATE_FILE} not found. Skipping import."
+    echo "WARNING: Dashboard template ${DASHBOARD_TEMPLATE_PATH} not found. Skipping import."
 fi
 
 echo "--- Setup Complete! ---"
