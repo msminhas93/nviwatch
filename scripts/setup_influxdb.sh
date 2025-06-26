@@ -8,7 +8,7 @@ INFLUX_PASSWORD="password12345"
 INFLUX_ORG="my-org"
 INFLUX_BUCKET="gpu-metrics"
 INFLUX_RETENTION="7d" # Data retention period
-DASHBOARD_TEMPLATE_FILE="config/gpu_dashboard_template.json"
+DASHBOARD_TEMPLATE_FILE="../config/gpu_dashboard_template.json"
 
 # Exit immediately if a command exits with a non-zero status.
 set -e

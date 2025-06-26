@@ -89,8 +89,8 @@ NviWatch supports streaming GPU metrics to InfluxDB for persistent storage and a
 
 1. **Run the setup script** (recommended for Ubuntu/Debian):
    ```bash
-   chmod +x setup_influxdb.sh
-   ./setup_influxdb.sh
+   chmod +x scripts/setup_influxdb.sh
+   ./scripts/setup_influxdb.sh
    ```
 
    This script will:
@@ -149,7 +149,7 @@ The included dashboard provides:
 
 ### Custom Configuration
 
-You can modify the `setup_influxdb.sh` script to change default settings:
+You can modify the `scripts/setup_influxdb.sh` script to change default settings:
 - Edit the configuration variables at the top of the script
 - Re-run the script to apply changes
 - Update your nviwatch command with the new credentials
