@@ -35,7 +35,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 .long("watch")
                 .value_name("MILLISECONDS")
                 .help("Refresh interval in milliseconds")
-                .default_value("1000")
+                .default_value("300")
                 .required(false),
         )
         .arg(
