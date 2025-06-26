@@ -94,7 +94,7 @@ NviWatch supports streaming GPU metrics to InfluxDB for persistent storage and a
    ```
 
    This script will:
-   - Install InfluxDB 2.x
+   - Install InfluxDB 3.x (with fallback to InfluxDB 2.x if 3.x is not available)
    - Configure the database with default settings:
      - Username: `admin`
      - Password: `password12345`
