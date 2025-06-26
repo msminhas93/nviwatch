@@ -23,3 +23,5 @@ prettytable-rs = "0.10.0"
 procfs = "0.16.0"
 ratatui = "0.28.1"
 textwrap = "0.16.1"
+influxdb = { version = "0.7.1", features = ["derive"] }
+tokio = { version = "1", features = ["full"] }

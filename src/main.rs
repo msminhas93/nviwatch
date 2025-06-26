@@ -1,9 +1,13 @@
 mod app_state;
 mod gpu;
+mod telemetry;
 mod ui;
 mod utils;
+
 extern crate nvml_wrapper as nvml;
+
 use crate::gpu::info::collect_gpu_info;
+use crate::telemetry::{send_to_influxdb, InfluxDBConfig};
 use crate::ui::render::ui;
 use crate::utils::system::kill_selected_process;
 use app_state::AppState;
@@ -19,6 +23,7 @@ use ratatui::Terminal;
 use std::error::Error;
 use std::io::stdout;
 use std::time::{Duration, Instant};
+
 fn main() -> Result<(), Box<dyn Error>> {
     let matches = Command::new("nviwatch")
         .version("0.1.0")
@@ -30,7 +35,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 .long("watch")
                 .value_name("MILLISECONDS")
                 .help("Refresh interval in milliseconds")
-                .default_value("100") // Set the default value to "100"
+                .default_value("1000")
                 .required(false),
         )
         .arg(
@@ -47,6 +52,34 @@ fn main() -> Result<(), Box<dyn Error>> {
                 .help("Display GPU graphs as bar charts")
                 .action(clap::ArgAction::SetTrue),
         )
+        .arg(
+            Arg::new("influx-url")
+                .long("influx-url")
+                .value_name("URL")
+                .help("InfluxDB URL")
+                .required(false),
+        )
+        .arg(
+            Arg::new("influx-org")
+                .long("influx-org")
+                .value_name("ORG")
+                .help("InfluxDB organization")
+                .required(false),
+        )
+        .arg(
+            Arg::new("influx-bucket")
+                .long("influx-bucket")
+                .value_name("BUCKET")
+                .help("InfluxDB bucket")
+                .required(false),
+        )
+        .arg(
+            Arg::new("influx-token")
+                .long("influx-token")
+                .value_name("TOKEN")
+                .help("InfluxDB token")
+                .required(false),
+        )
         .get_matches();
 
     let use_tabbed_graphs = matches.get_flag("tabbed-graphs");
@@ -56,6 +89,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         .get_one::<String>("watch")
         .map(|s| s.parse().expect("Invalid number"))
         .unwrap_or(1000);
+
+    let influx_url = matches.get_one::<String>("influx-url").cloned();
+    let influx_org = matches.get_one::<String>("influx-org").cloned();
+    let influx_bucket = matches.get_one::<String>("influx-bucket").cloned();
+    let influx_token = matches.get_one::<String>("influx-token").cloned();
 
     let nvml = Nvml::init()?;
 
@@ -78,12 +116,28 @@ fn main() -> Result<(), Box<dyn Error>> {
         use_tabbed_graphs,
         use_bar_charts,
     };
+
     loop {
         if last_update.elapsed() >= Duration::from_millis(watch_interval) {
             last_update = Instant::now();
-            collect_gpu_info(&nvml, &mut app_state)?;
-            terminal.draw(|f| ui(f, &app_state))?;
+            app_state.gpu_infos = collect_gpu_info(&nvml, &mut app_state)?;
+
+            if let (Some(url), Some(org), Some(bucket), Some(token)) =
+                (influx_url.as_ref(), influx_org.as_ref(), influx_bucket.as_ref(), influx_token.as_ref())
+            {
+                let influx_config = InfluxDBConfig {
+                    url: url.clone(),
+                    org: org.clone(),
+                    bucket: bucket.clone(),
+                    token: token.clone(),
+                };
+                if let Err(e) = send_to_influxdb(&influx_config, &app_state.gpu_infos) {
+                    app_state.error_message = Some(format!("InfluxDB Error: {}", e));
+                }
+            }
         }
+
+        terminal.draw(|f| ui(f, &app_state))?;
 
         if event::poll(Duration::from_millis(100))? {
             if let Event::Key(key) = event::read()? {
@@ -100,7 +154,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                             .iter()
                             .map(|gpu| gpu.processes.len())
                             .sum();
-                        if app_state.selected_process < total_processes - 1 {
+                        if total_processes > 0 && app_state.selected_process < total_processes - 1 {
                             app_state.selected_process += 1;
                         }
                     }
@@ -116,37 +170,15 @@ fn main() -> Result<(), Box<dyn Error>> {
                             app_state.selected_gpu_tab += 1;
                         }
                     }
-                    KeyCode::Char('x') => match kill_selected_process(&app_state) {
-                        Ok(_) => {
-                            app_state.gpu_infos = collect_gpu_info(&nvml, &mut app_state)?;
-                        }
-                        Err(e) => {
+                    KeyCode::Char('x') => {
+                        if let Err(e) = kill_selected_process(&app_state) {
                             app_state.error_message = Some(e.to_string());
                         }
-                    },
-                    KeyCode::Char('d') => {
-                        app_state.use_tabbed_graphs = false;
-                        app_state.use_bar_charts = false;
-                    }
-                    KeyCode::Char('t') => {
-                        app_state.use_tabbed_graphs = true;
-                        app_state.use_bar_charts = false;
-                    }
-                    KeyCode::Char('b') => {
-                        app_state.use_tabbed_graphs = false;
-                        app_state.use_bar_charts = true;
                     }
                     _ => {}
                 }
             }
         }
-
-        if last_update.elapsed() >= Duration::from_millis(watch_interval) {
-            last_update = Instant::now();
-            app_state.gpu_infos = collect_gpu_info(&nvml, &mut app_state)?;
-        }
-
-        terminal.draw(|f| ui(f, &app_state))?;
     }
 
     disable_raw_mode()?;

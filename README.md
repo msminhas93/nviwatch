@@ -5,6 +5,11 @@
     - [Installation Size Comparison](#installation-size-comparison)
     - [Analysis](#analysis)
   - [Features](#features)
+  - [InfluxDB Integration](#influxdb-integration)
+    - [Setting up InfluxDB](#setting-up-influxdb)
+    - [Running NviWatch with InfluxDB Logging](#running-nviwatch-with-influxdb-logging)
+    - [Dashboard Features](#dashboard-features)
+    - [Custom Configuration](#custom-configuration)
   - [Installing and Using the Tool](#installing-and-using-the-tool)
     - [Option 1: Download Pre-built Binary](#option-1-download-pre-built-binary)
     - [Option 2: Install via Cargo](#option-2-install-via-cargo)
@@ -74,6 +79,78 @@ We used [python-package-size](https://github.com/qertoip/python-package-size) fo
 - **Process Management**: Monitor processes running on the GPU and terminate them directly from the interface.
 - **Graphical Display**: Visualize GPU performance metrics using bar charts and tabbed graphs.
 - **Customizable Refresh Rate**: Set the refresh interval for updating GPU metrics.
+- **InfluxDB Integration**: Stream GPU metrics to InfluxDB for long-term monitoring and visualization.
+
+## InfluxDB Integration
+
+NviWatch supports streaming GPU metrics to InfluxDB for persistent storage and advanced visualization. This enables long-term monitoring, historical analysis, and custom dashboards.
+
+### Setting up InfluxDB
+
+1. **Run the setup script** (recommended for Ubuntu/Debian):
+   ```bash
+   chmod +x setup_influxdb.sh
+   ./setup_influxdb.sh
+   ```
+
+   This script will:
+   - Install InfluxDB 2.x
+   - Configure the database with default settings:
+     - Username: `admin`
+     - Password: `password12345`
+     - Organization: `my-org`
+     - Bucket: `gpu-metrics`
+     - Data retention: 7 days
+   - Import a pre-configured GPU monitoring dashboard
+
+2. **Get your admin token**:
+   ```bash
+   influx auth list
+   ```
+
+3. **Access the InfluxDB dashboard**:
+   - Open your web browser and navigate to `http://localhost:8086`
+   - Login with the credentials:
+     - Username: `admin`
+     - Password: `password12345`
+
+### Running NviWatch with InfluxDB Logging
+
+To start NviWatch with InfluxDB integration, use the following command-line options:
+
+```bash
+nviwatch \
+  --influx-url "http://localhost:8086" \
+  --influx-org "my-org" \
+  --influx-bucket "gpu-metrics" \
+  --influx-token "your-admin-token-here"
+```
+
+**Example with all options**:
+```bash
+nviwatch \
+  --watch 1000 \
+  --tabbed-graphs \
+  --influx-url "http://localhost:8086" \
+  --influx-org "my-org" \
+  --influx-bucket "gpu-metrics" \
+  --influx-token "your-admin-token-here"
+```
+
+### Dashboard Features
+
+The included dashboard provides:
+- **Memory Utilization**: Real-time GPU memory usage tracking
+- **GPU Utilization**: Performance utilization percentage over time
+- **Temperature**: GPU temperature monitoring with alerts
+- **Power Usage**: Power consumption tracking in watts
+
+### Custom Configuration
+
+You can modify the `setup_influxdb.sh` script to change default settings:
+- Edit the configuration variables at the top of the script
+- Re-run the script to apply changes
+- Update your nviwatch command with the new credentials
 
 ## Installing and Using the Tool
 
@@ -135,13 +212,37 @@ To build and run NviWatch, ensure you have Rust and Cargo installed on your syst
 
 NviWatch provides a command-line interface with several options:
 
-- `-w, --watch <MILLISECONDS>`: Set the refresh interval in milliseconds. Default is 100 ms.
+- `-w, --watch <MILLISECONDS>`: Set the refresh interval in milliseconds. Default is 1000 ms.
 - `-t, --tabbed-graphs`: Display GPU graphs in a tabbed view.
 - `-b, --bar-chart`: Display GPU graphs as bar charts.
+- `--influx-url <URL>`: InfluxDB server URL (e.g., "http://localhost:8086").
+- `--influx-org <ORG>`: InfluxDB organization name.
+- `--influx-bucket <BUCKET>`: InfluxDB bucket name for storing metrics.
+- `--influx-token <TOKEN>`: InfluxDB authentication token.
 
-Example:
+**Basic examples**:
 ```bash
+# Run with default settings
+./nviwatch
+
+# Run with custom refresh rate and tabbed graphs
 ./nviwatch --watch 500 --tabbed-graphs
+
+# Run with InfluxDB integration
+./nviwatch \
+  --influx-url "http://localhost:8086" \
+  --influx-org "my-org" \
+  --influx-bucket "gpu-metrics" \
+  --influx-token "your-admin-token-here"
+
+# Run with all features enabled
+./nviwatch \
+  --watch 1000 \
+  --tabbed-graphs \
+  --influx-url "http://localhost:8086" \
+  --influx-org "my-org" \
+  --influx-bucket "gpu-metrics" \
+  --influx-token "your-admin-token-here"
 ```
 
 ## Key Bindings
