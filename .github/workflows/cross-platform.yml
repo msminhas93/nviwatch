@@ -1,0 +1,114 @@
+name: Cross-Platform Build
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+    container:
+      image: nvidia/cuda:11.8.0-devel-ubuntu22.04
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install dependencies
+      run: |
+        apt-get update
+        apt-get install -y curl build-essential
+    
+    - name: Install Rust
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+        override: true
+    
+    - name: Build for Linux
+      run: cargo build --release
+    
+    - name: Test on Linux
+      run: cargo test
+    
+    - name: Upload Linux artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: nviwatch-linux
+        path: target/release/nviwatch
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install Rust
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+        override: true
+    
+    - name: Build for Windows
+      run: cargo build --release --target x86_64-pc-windows-msvc
+    
+    - name: Test on Windows
+      run: cargo test --target x86_64-pc-windows-msvc
+    
+    - name: Upload Windows artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: nviwatch-windows
+        path: target/x86_64-pc-windows-msvc/release/nviwatch.exe
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install Rust
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+        override: true
+    
+    - name: Build for macOS
+      run: cargo build --release --target x86_64-apple-darwin
+    
+    - name: Test on macOS
+      run: cargo test --target x86_64-apple-darwin
+    
+    - name: Upload macOS artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: nviwatch-macos
+        path: target/x86_64-apple-darwin/release/nviwatch
+
+  test-cross-compilation:
+    runs-on: ubuntu-latest
+    container:
+      image: nvidia/cuda:11.8.0-devel-ubuntu22.04
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install dependencies
+      run: |
+        apt-get update
+        apt-get install -y curl build-essential gcc-multilib gcc-mingw-w64
+    
+    - name: Install Rust
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+        override: true
+    
+    - name: Add Windows target
+      run: rustup target add x86_64-pc-windows-msvc
+    
+    - name: Add macOS target
+      run: rustup target add x86_64-apple-darwin
+    
+    - name: Test cross-compilation
+      run: |
+        cargo check --target x86_64-pc-windows-msvc
+        cargo check --target x86_64-apple-darwin

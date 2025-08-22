@@ -1,6 +1,7 @@
 mod app_state;
 mod gpu;
 mod influxdb;
+// mod platform;
 mod ui;
 mod utils;
 
@@ -122,9 +123,12 @@ fn main() -> Result<(), Box<dyn Error>> {
             last_update = Instant::now();
             app_state.gpu_infos = collect_gpu_info(&nvml, &mut app_state)?;
 
-            if let (Some(url), Some(org), Some(bucket), Some(token)) =
-                (influx_url.as_ref(), influx_org.as_ref(), influx_bucket.as_ref(), influx_token.as_ref())
-            {
+            if let (Some(url), Some(org), Some(bucket), Some(token)) = (
+                influx_url.as_ref(),
+                influx_org.as_ref(),
+                influx_bucket.as_ref(),
+                influx_token.as_ref(),
+            ) {
                 let influx_config = InfluxDBConfig {
                     url: url.clone(),
                     org: org.clone(),

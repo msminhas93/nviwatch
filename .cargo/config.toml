@@ -1,0 +1,22 @@
+[build]
+# Enable cross-compilation support
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.x86_64-unknown-linux-gnu]
+# Linux target configuration
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.x86_64-pc-windows-msvc]
+# Windows target configuration
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.x86_64-apple-darwin]
+# macOS target configuration
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[alias]
+# Convenience aliases for building for different platforms
+build-linux = "build --target x86_64-unknown-linux-gnu"
+build-windows = "build --target x86_64-pc-windows-msvc"
+build-macos = "build --target x86_64-apple-darwin"
+build-all = "build && build-linux && build-windows && build-macos"
