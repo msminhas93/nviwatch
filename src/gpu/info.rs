@@ -1,8 +1,8 @@
+use crate::AppState;
 use crate::gpu::process::GpuProcessInfo;
 use crate::utils::system::get_process_info;
-use crate::AppState;
-use nvml_wrapper::enum_wrappers::device::TemperatureSensor;
-use nvml_wrapper::Nvml;
+use nvml::Nvml;
+use nvml::enum_wrappers::device::TemperatureSensor;
 use std::error::Error;
 
 pub struct GpuInfo {

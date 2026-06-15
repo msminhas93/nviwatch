@@ -4,10 +4,8 @@ mod influxdb;
 mod ui;
 mod utils;
 
-extern crate nvml_wrapper as nvml;
-
 use crate::gpu::info::collect_gpu_info;
-use crate::influxdb::{send_to_influxdb, InfluxDBConfig};
+use crate::influxdb::{InfluxDBConfig, send_to_influxdb};
 use crate::ui::render::ui;
 use crate::utils::system::kill_selected_process;
 use app_state::AppState;
@@ -15,11 +13,11 @@ use clap::{Arg, Command};
 use crossterm::event::{self, Event, KeyCode};
 use crossterm::execute;
 use crossterm::terminal::{
-    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
 use nvml::Nvml;
-use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
+use ratatui::backend::CrosstermBackend;
 use std::error::Error;
 use std::io::stdout;
 use std::time::{Duration, Instant};
@@ -122,9 +120,12 @@ fn main() -> Result<(), Box<dyn Error>> {
             last_update = Instant::now();
             app_state.gpu_infos = collect_gpu_info(&nvml, &mut app_state)?;
 
-            if let (Some(url), Some(org), Some(bucket), Some(token)) =
-                (influx_url.as_ref(), influx_org.as_ref(), influx_bucket.as_ref(), influx_token.as_ref())
-            {
+            if let (Some(url), Some(org), Some(bucket), Some(token)) = (
+                influx_url.as_ref(),
+                influx_org.as_ref(),
+                influx_bucket.as_ref(),
+                influx_token.as_ref(),
+            ) {
                 let influx_config = InfluxDBConfig {
                     url: url.clone(),
                     org: org.clone(),
@@ -139,56 +140,56 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         terminal.draw(|f| ui(f, &app_state))?;
 
-        if event::poll(Duration::from_millis(100))? {
-            if let Event::Key(key) = event::read()? {
-                match key.code {
-                    KeyCode::Char('q') => break,
-                    KeyCode::Up => {
-                        if app_state.selected_process > 0 {
-                            app_state.selected_process -= 1;
-                        }
+        if event::poll(Duration::from_millis(100))?
+            && let Event::Key(key) = event::read()?
+        {
+            match key.code {
+                KeyCode::Char('q') => break,
+                KeyCode::Up | KeyCode::Char('k') => {
+                    if app_state.selected_process > 0 {
+                        app_state.selected_process -= 1;
                     }
-                    KeyCode::Down => {
-                        let total_processes: usize = app_state
-                            .gpu_infos
-                            .iter()
-                            .map(|gpu| gpu.processes.len())
-                            .sum();
-                        if total_processes > 0 && app_state.selected_process < total_processes - 1 {
-                            app_state.selected_process += 1;
-                        }
-                    }
-                    KeyCode::Left => {
-                        if app_state.use_tabbed_graphs && app_state.selected_gpu_tab > 0 {
-                            app_state.selected_gpu_tab -= 1;
-                        }
-                    }
-                    KeyCode::Right => {
-                        if app_state.use_tabbed_graphs
-                            && app_state.selected_gpu_tab < app_state.gpu_infos.len() - 1
-                        {
-                            app_state.selected_gpu_tab += 1;
-                        }
-                    }
-                    KeyCode::Char('x') => {
-                        if let Err(e) = kill_selected_process(&app_state) {
-                            app_state.error_message = Some(e.to_string());
-                        }
-                    }
-                    KeyCode::Char('d') => {
-                        app_state.use_tabbed_graphs = false;
-                        app_state.use_bar_charts = false;
-                    }
-                    KeyCode::Char('t') => {
-                        app_state.use_tabbed_graphs = true;
-                        app_state.use_bar_charts = false;
-                    }
-                    KeyCode::Char('b') => {
-                        app_state.use_tabbed_graphs = false;
-                        app_state.use_bar_charts = true;
-                    }
-                    _ => {}
                 }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    let total_processes: usize = app_state
+                        .gpu_infos
+                        .iter()
+                        .map(|gpu| gpu.processes.len())
+                        .sum();
+                    if total_processes > 0 && app_state.selected_process < total_processes - 1 {
+                        app_state.selected_process += 1;
+                    }
+                }
+                KeyCode::Left | KeyCode::Char('h') => {
+                    if app_state.use_tabbed_graphs && app_state.selected_gpu_tab > 0 {
+                        app_state.selected_gpu_tab -= 1;
+                    }
+                }
+                KeyCode::Right | KeyCode::Char('l') => {
+                    if app_state.use_tabbed_graphs
+                        && app_state.selected_gpu_tab < app_state.gpu_infos.len() - 1
+                    {
+                        app_state.selected_gpu_tab += 1;
+                    }
+                }
+                KeyCode::Char('x') => {
+                    if let Err(e) = kill_selected_process(&app_state) {
+                        app_state.error_message = Some(e.to_string());
+                    }
+                }
+                KeyCode::Char('d') => {
+                    app_state.use_tabbed_graphs = false;
+                    app_state.use_bar_charts = false;
+                }
+                KeyCode::Char('t') => {
+                    app_state.use_tabbed_graphs = true;
+                    app_state.use_bar_charts = false;
+                }
+                KeyCode::Char('b') => {
+                    app_state.use_tabbed_graphs = false;
+                    app_state.use_bar_charts = true;
+                }
+                _ => {}
             }
         }
     }
