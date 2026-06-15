@@ -74,11 +74,11 @@ pub fn render_tabbed_gpu_graphs(f: &mut Frame, area: Rect, app_state: &AppState)
 
 pub fn render_footer(f: &mut Frame, area: Rect, app_state: &AppState) {
     let footer_text = if app_state.use_tabbed_graphs {
-        "↑↓: nav processes | ←→: switch GPU tabs | x: kill process | d: default mode | b: bar mode | q: quit"
+        "j/k: navigate | gg/G: top/bottom | d: kill | <-/->: switch tabs | Ctrl+d: default | b: bar | q: quit"
     } else if app_state.use_bar_charts {
-        "↑↓: nav processes | x: kill process | d: default mode | t: tabbed mode | q: quit"
+        "j/k: navigate | gg/G: top/bottom | d: kill | Ctrl+d: default | t: tabbed | q: quit"
     } else {
-        "↑↓: nav processes | x: kill process | b: bar mode | t: tabbed mode | q: quit"
+        "j/k: navigate | gg/G: top/bottom | d: kill | Ctrl+d: default | b: bar | t: tabbed | q: quit"
     };
 
     let footer = Paragraph::new(footer_text)

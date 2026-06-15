@@ -9,6 +9,7 @@ pub struct AppState {
     pub utilization_history: Vec<Vec<u64>>,
     pub use_tabbed_graphs: bool,
     pub use_bar_charts: bool,
+    pub pending_g: bool,
 }
 
 
@@ -44,6 +45,7 @@ mod tests {
             utilization_history: vec![],
             use_tabbed_graphs: true,
             use_bar_charts: false,
+            pending_g: false,
         };
         
         assert_eq!(state.selected_process, 0);
@@ -67,6 +69,7 @@ mod tests {
             utilization_history: vec![],
             use_tabbed_graphs: false,
             use_bar_charts: false,
+            pending_g: false,
         };
         
         let total_processes: usize = state.gpu_infos.iter().map(|gpu| gpu.processes.len()).sum();
@@ -87,6 +90,7 @@ mod tests {
             utilization_history: vec![],
             use_tabbed_graphs: false,
             use_bar_charts: false,
+            pending_g: false,
         };
         
         let total_processes: usize = state.gpu_infos.iter().map(|gpu| gpu.processes.len()).sum();
@@ -104,6 +108,7 @@ mod tests {
             utilization_history: vec![],
             use_tabbed_graphs: false,
             use_bar_charts: false,
+            pending_g: false,
         };
         // Should not be able to select any process when there are no GPUs
         let total_processes: usize = state.gpu_infos.iter().map(|gpu| gpu.processes.len()).sum();
@@ -122,6 +127,7 @@ mod tests {
             utilization_history: vec![],
             use_tabbed_graphs: false,
             use_bar_charts: false,
+            pending_g: false,
         };
         
         // Should be able to select GPU 0, but not GPU 1
@@ -140,6 +146,7 @@ mod tests {
             utilization_history: vec![],
             use_tabbed_graphs: false,
             use_bar_charts: false,
+            pending_g: false,
         };
         
         // Initially no error

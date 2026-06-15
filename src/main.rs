@@ -5,12 +5,13 @@ mod ui;
 mod utils;
 
 use crate::gpu::info::collect_gpu_info;
+use crate::gpu::process::GpuProcessInfo;
 use crate::influxdb::{InfluxDBConfig, send_to_influxdb};
 use crate::ui::render::ui;
 use crate::utils::system::kill_selected_process;
 use app_state::AppState;
 use clap::{Arg, Command};
-use crossterm::event::{self, Event, KeyCode};
+use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -113,6 +114,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         utilization_history: Vec::new(),
         use_tabbed_graphs,
         use_bar_charts,
+        pending_g: false,
     };
 
     loop {
@@ -143,6 +145,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         if event::poll(Duration::from_millis(100))?
             && let Event::Key(key) = event::read()?
         {
+            // Reset gg pending state on any non-g keypress
+            if !matches!(key.code, KeyCode::Char('g')) {
+                app_state.pending_g = false;
+            }
+
             match key.code {
                 KeyCode::Char('q') => break,
                 KeyCode::Up | KeyCode::Char('k') => {
@@ -172,14 +179,50 @@ fn main() -> Result<(), Box<dyn Error>> {
                         app_state.selected_gpu_tab += 1;
                     }
                 }
-                KeyCode::Char('x') => {
-                    if let Err(e) = kill_selected_process(&app_state) {
-                        app_state.error_message = Some(e.to_string());
+                KeyCode::Char('g') => {
+                    if app_state.pending_g {
+                        // gg - go to top
+                        app_state.selected_process = 0;
+                        app_state.pending_g = false;
+                    } else {
+                        app_state.pending_g = true;
                     }
                 }
-                KeyCode::Char('d') => {
+                KeyCode::Char('G') => {
+                    // G - go to bottom
+                    let total_processes: usize = app_state
+                        .gpu_infos
+                        .iter()
+                        .map(|gpu| gpu.processes.len())
+                        .sum();
+                    if total_processes > 0 {
+                        app_state.selected_process = total_processes - 1;
+                    }
+                }
+                KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    // Ctrl+d - default mode
                     app_state.use_tabbed_graphs = false;
                     app_state.use_bar_charts = false;
+                }
+                KeyCode::Char('d') => {
+                    // d - kill selected process
+                    let total_processes: usize = app_state
+                        .gpu_infos
+                        .iter()
+                        .map(|gpu| gpu.processes.len())
+                        .sum();
+                    if app_state.selected_process < total_processes {
+                        let all_processes: Vec<&GpuProcessInfo> = app_state
+                            .gpu_infos
+                            .iter()
+                            .flat_map(|gpu| &gpu.processes)
+                            .collect();
+                        if let Some(process) = all_processes.get(app_state.selected_process) {
+                            if let Err(e) = kill_selected_process(process.pid, &process.command) {
+                                app_state.error_message = Some(e.to_string());
+                            }
+                        }
+                    }
                 }
                 KeyCode::Char('t') => {
                     app_state.use_tabbed_graphs = true;
