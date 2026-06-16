@@ -1,9 +1,9 @@
+use crate::AppState;
+use crate::error::NviError;
 use crate::gpu::process::GpuProcessInfo;
 use crate::utils::system::get_process_info;
-use crate::AppState;
-use nvml_wrapper::enum_wrappers::device::TemperatureSensor;
-use nvml_wrapper::Nvml;
-use std::error::Error;
+use nvml::Nvml;
+use nvml::enum_wrappers::device::TemperatureSensor;
 
 pub struct GpuInfo {
     pub index: usize,
@@ -17,10 +17,7 @@ pub struct GpuInfo {
     pub clock_freq: u32,
     pub processes: Vec<GpuProcessInfo>,
 }
-pub fn collect_gpu_info(
-    nvml: &Nvml,
-    app_state: &mut AppState,
-) -> Result<Vec<GpuInfo>, Box<dyn Error>> {
+pub fn collect_gpu_info(nvml: &Nvml, app_state: &mut AppState) -> Result<Vec<GpuInfo>, NviError> {
     let device_count = nvml.device_count()?;
     let mut gpu_infos = Vec::new();
 

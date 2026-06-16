@@ -1,11 +1,11 @@
 mod app_state;
+mod error;
 mod gpu;
 mod influxdb;
 mod ui;
 mod utils;
 
-extern crate nvml_wrapper as nvml;
-
+use crate::error::NviError;
 use crate::gpu::info::collect_gpu_info;
 use crate::influxdb::{send_to_influxdb, InfluxDBConfig};
 use crate::ui::render::ui;
@@ -20,11 +20,10 @@ use crossterm::terminal::{
 use nvml::Nvml;
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
-use std::error::Error;
 use std::io::stdout;
 use std::time::{Duration, Instant};
 
-fn main() -> Result<(), Box<dyn Error>> {
+fn main() -> Result<(), NviError> {
     let matches = Command::new("nviwatch")
         .version("0.1.0")
         .author("Manpreet Singh")
@@ -122,9 +121,12 @@ fn main() -> Result<(), Box<dyn Error>> {
             last_update = Instant::now();
             app_state.gpu_infos = collect_gpu_info(&nvml, &mut app_state)?;
 
-            if let (Some(url), Some(org), Some(bucket), Some(token)) =
-                (influx_url.as_ref(), influx_org.as_ref(), influx_bucket.as_ref(), influx_token.as_ref())
-            {
+            if let (Some(url), Some(org), Some(bucket), Some(token)) = (
+                influx_url.as_ref(),
+                influx_org.as_ref(),
+                influx_bucket.as_ref(),
+                influx_token.as_ref(),
+            ) {
                 let influx_config = InfluxDBConfig {
                     url: url.clone(),
                     org: org.clone(),

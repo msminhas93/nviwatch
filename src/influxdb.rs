@@ -1,6 +1,6 @@
-use influxdb::{Client, Timestamp, WriteQuery};
+use crate::error::NviError;
 use crate::gpu::info::GpuInfo;
-use std::error::Error;
+use influxdb::{Client, Timestamp, WriteQuery};
 use tokio::runtime::Runtime;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -12,24 +12,24 @@ pub struct InfluxDBConfig {
 }
 
 impl InfluxDBConfig {
-    pub fn validate(&self) -> Result<(), Box<dyn Error>> {
+    pub fn validate(&self) -> Result<(), NviError> {
         if self.url.is_empty() {
-            return Err("InfluxDB URL cannot be empty".into());
+            return Err(NviError::General("InfluxDB URL cannot be empty".into()));
         }
         if self.org.is_empty() {
-            return Err("InfluxDB organization cannot be empty".into());
+            return Err(NviError::General("InfluxDB organization cannot be empty".into()));
         }
         if self.bucket.is_empty() {
-            return Err("InfluxDB bucket cannot be empty".into());
+            return Err(NviError::General("InfluxDB bucket cannot be empty".into()));
         }
         if self.token.is_empty() {
-            return Err("InfluxDB token cannot be empty".into());
+            return Err(NviError::General("InfluxDB token cannot be empty".into()));
         }
         Ok(())
     }
 }
 
-pub fn send_to_influxdb(config: &InfluxDBConfig, gpu_infos: &[GpuInfo]) -> Result<(), Box<dyn Error>> {
+pub fn send_to_influxdb(config: &InfluxDBConfig, gpu_infos: &[GpuInfo]) -> Result<(), NviError> {
     // Validate configuration first
     config.validate()?;
 
