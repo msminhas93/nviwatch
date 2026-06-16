@@ -1,9 +1,9 @@
 use crate::app_state::AppState;
 use crate::gpu::info::GpuInfo;
+use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::prelude::*;
 use ratatui::widgets::*;
-use ratatui::Frame;
 use std::cmp;
 
 pub fn render_gpu_graphs(f: &mut Frame, area: Rect, app_state: &AppState) {
@@ -89,32 +89,33 @@ pub fn render_footer(f: &mut Frame, area: Rect, app_state: &AppState) {
 
 pub fn render_all_gpu_graphs(f: &mut Frame, area: Rect, app_state: &AppState) {
     let gpu_count = app_state.gpu_infos.len();
-    if gpu_count > 0 {
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints(vec![
-                Constraint::Percentage((100 / gpu_count) as u16);
-                gpu_count
-            ])
-            .split(area);
-
-        for (index, _) in app_state.gpu_infos.iter().enumerate() {
-            let gpu_area = chunks[index];
-            let gpu_chunks = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([Constraint::Percentage(50), Constraint::Percentage(50)].as_ref())
-                .split(gpu_area);
-
-            render_power_graph(f, gpu_chunks[0], app_state, index);
-            render_utilization_graph(f, gpu_chunks[1], app_state, index);
-        }
-    } else {
+    if gpu_count == 0 {
         // Display a message when no GPUs are found
         let no_gpus_message = "No GPUs found.";
         let paragraph = Paragraph::new(no_gpus_message)
             .style(Style::default().fg(Color::Red))
             .alignment(Alignment::Center);
         f.render_widget(paragraph, area);
+        return;
+    }
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(vec![
+            Constraint::Percentage((100 / gpu_count) as u16);
+            gpu_count
+        ])
+        .split(area);
+
+    for (index, _) in app_state.gpu_infos.iter().enumerate() {
+        let gpu_area = chunks[index];
+        let gpu_chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)].as_ref())
+            .split(gpu_area);
+
+        render_power_graph(f, gpu_chunks[0], app_state, index);
+        render_utilization_graph(f, gpu_chunks[1], app_state, index);
     }
 }
 

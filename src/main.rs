@@ -1,13 +1,11 @@
 mod app_state;
 mod gpu;
-mod influxdb;
+mod influx_local;
 mod ui;
 mod utils;
 
-extern crate nvml_wrapper as nvml;
-
 use crate::gpu::info::collect_gpu_info;
-use crate::influxdb::{send_to_influxdb, InfluxDBConfig};
+use crate::influx_local::InfluxDBConfig;
 use crate::ui::render::ui;
 use crate::utils::system::kill_selected_process;
 use app_state::AppState;
@@ -15,16 +13,20 @@ use clap::{Arg, Command};
 use crossterm::event::{self, Event, KeyCode};
 use crossterm::execute;
 use crossterm::terminal::{
-    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
 use nvml::Nvml;
-use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
+use ratatui::backend::CrosstermBackend;
 use std::error::Error;
 use std::io::stdout;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-fn main() -> Result<(), Box<dyn Error>> {
+pub const POLLING_TIMEOUT_MS: u64 = 100;
+
+pub(crate) type Result<T> = core::result::Result<T, Box<dyn Error + Send + Sync>>;
+
+fn main() -> Result<()> {
     let matches = Command::new("nviwatch")
         .version("0.1.0")
         .author("Manpreet Singh")
@@ -82,18 +84,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         )
         .get_matches();
 
-    let use_tabbed_graphs = matches.get_flag("tabbed-graphs");
-    let use_bar_charts = matches.get_flag("bar-chart");
-
     let watch_interval = matches
         .get_one::<String>("watch")
         .map(|s| s.parse().expect("Invalid number"))
         .unwrap_or(1000);
-
-    let influx_url = matches.get_one::<String>("influx-url").cloned();
-    let influx_org = matches.get_one::<String>("influx-org").cloned();
-    let influx_bucket = matches.get_one::<String>("influx-bucket").cloned();
-    let influx_token = matches.get_one::<String>("influx-token").cloned();
 
     let nvml = Nvml::init()?;
 
@@ -104,91 +98,96 @@ fn main() -> Result<(), Box<dyn Error>> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let mut last_update = Instant::now();
+    let mut app_state = AppState::from(&matches);
 
-    let mut app_state = AppState {
-        selected_process: 0,
-        selected_gpu_tab: 0,
-        gpu_infos: Vec::new(),
-        error_message: None,
-        power_history: Vec::new(),
-        utilization_history: Vec::new(),
-        use_tabbed_graphs,
-        use_bar_charts,
-    };
+    let runtime = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime");
 
     loop {
-        if last_update.elapsed() >= Duration::from_millis(watch_interval) {
-            last_update = Instant::now();
+        if app_state.should_update(watch_interval) {
+            // TODO: [internalize] — this whole block could live on AppState:
+            //   app_state.update(&nvml, config);
+            // The collector, history, and influx queries all operate on app_state's data anyway.
+
             app_state.gpu_infos = collect_gpu_info(&nvml, &mut app_state)?;
 
-            if let (Some(url), Some(org), Some(bucket), Some(token)) =
-                (influx_url.as_ref(), influx_org.as_ref(), influx_bucket.as_ref(), influx_token.as_ref())
-            {
-                let influx_config = InfluxDBConfig {
-                    url: url.clone(),
-                    org: org.clone(),
-                    bucket: bucket.clone(),
-                    token: token.clone(),
-                };
-                if let Err(e) = send_to_influxdb(&influx_config, &app_state.gpu_infos) {
-                    app_state.error_message = Some(format!("InfluxDB Error: {}", e));
-                }
-            }
+            let config = InfluxDBConfig::try_from(&matches)?;
+            let influx_client =
+                influxdb::Client::new(&config.url, &config.bucket).with_token(&config.token);
+            let queries: Vec<influxdb::WriteQuery> = app_state
+                .gpu_infos
+                .iter()
+                .map(influxdb::WriteQuery::from)
+                .collect();
+
+            runtime
+                .block_on(async {
+                    influx_client
+                        .query(queries)
+                        .await
+                        .map_err(|e| format!("InfluxDB Error: {}", e))
+                })
+                .inspect_err(|e| {
+                    app_state.error_message = Some(e.to_string());
+                })
+                .ok();
         }
 
         terminal.draw(|f| ui(f, &app_state))?;
 
-        if event::poll(Duration::from_millis(100))? {
-            if let Event::Key(key) = event::read()? {
-                match key.code {
-                    KeyCode::Char('q') => break,
-                    KeyCode::Up => {
-                        if app_state.selected_process > 0 {
-                            app_state.selected_process -= 1;
-                        }
+        // Most of the key event handling probably better off being moved to an actual event key handler
+        // and we just ask it to 'start' at the start of program & handle it
+        // via messages etc.
+
+        if event::poll(Duration::from_millis(POLLING_TIMEOUT_MS))?
+            && let Event::Key(key) = event::read()?
+        {
+            match key.code {
+                KeyCode::Char('q') => break,
+                KeyCode::Up => {
+                    if app_state.selected_process > 0 {
+                        app_state.selected_process -= 1;
                     }
-                    KeyCode::Down => {
-                        let total_processes: usize = app_state
-                            .gpu_infos
-                            .iter()
-                            .map(|gpu| gpu.processes.len())
-                            .sum();
-                        if total_processes > 0 && app_state.selected_process < total_processes - 1 {
-                            app_state.selected_process += 1;
-                        }
-                    }
-                    KeyCode::Left => {
-                        if app_state.use_tabbed_graphs && app_state.selected_gpu_tab > 0 {
-                            app_state.selected_gpu_tab -= 1;
-                        }
-                    }
-                    KeyCode::Right => {
-                        if app_state.use_tabbed_graphs
-                            && app_state.selected_gpu_tab < app_state.gpu_infos.len() - 1
-                        {
-                            app_state.selected_gpu_tab += 1;
-                        }
-                    }
-                    KeyCode::Char('x') => {
-                        if let Err(e) = kill_selected_process(&app_state) {
-                            app_state.error_message = Some(e.to_string());
-                        }
-                    }
-                    KeyCode::Char('d') => {
-                        app_state.use_tabbed_graphs = false;
-                        app_state.use_bar_charts = false;
-                    }
-                    KeyCode::Char('t') => {
-                        app_state.use_tabbed_graphs = true;
-                        app_state.use_bar_charts = false;
-                    }
-                    KeyCode::Char('b') => {
-                        app_state.use_tabbed_graphs = false;
-                        app_state.use_bar_charts = true;
-                    }
-                    _ => {}
                 }
+                KeyCode::Down => {
+                    let total_processes: usize = app_state
+                        .gpu_infos
+                        .iter()
+                        .map(|gpu| gpu.processes.len())
+                        .sum();
+                    if total_processes > 0 && app_state.selected_process < total_processes - 1 {
+                        app_state.selected_process += 1;
+                    }
+                }
+                KeyCode::Left => {
+                    if app_state.use_tabbed_graphs && app_state.selected_gpu_tab > 0 {
+                        app_state.selected_gpu_tab -= 1;
+                    }
+                }
+                KeyCode::Right => {
+                    if app_state.use_tabbed_graphs
+                        && app_state.selected_gpu_tab < app_state.gpu_infos.len() - 1
+                    {
+                        app_state.selected_gpu_tab += 1;
+                    }
+                }
+                KeyCode::Char('x') => {
+                    if let Err(e) = kill_selected_process(&app_state) {
+                        app_state.error_message = Some(e.to_string());
+                    }
+                }
+                KeyCode::Char('d') => {
+                    app_state.use_tabbed_graphs = false;
+                    app_state.use_bar_charts = false;
+                }
+                KeyCode::Char('t') => {
+                    app_state.use_tabbed_graphs = true;
+                    app_state.use_bar_charts = false;
+                }
+                KeyCode::Char('b') => {
+                    app_state.use_tabbed_graphs = false;
+                    app_state.use_bar_charts = true;
+                }
+                _ => {}
             }
         }
     }
