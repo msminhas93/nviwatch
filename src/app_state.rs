@@ -1,5 +1,7 @@
 use crate::gpu::info::GpuInfo;
+use crate::gpu::process::GpuProcessInfo;
 use crate::keybinds::PendingOp;
+use std::cmp::Reverse;
 
 pub struct AppState {
     pub selected_process: usize,
@@ -14,7 +16,38 @@ pub struct AppState {
     pub pending_op: PendingOp,
 }
 
+impl AppState {
+    /// Total GPU process rows (all devices). Count only — no sort.
+    pub fn total_process_count(&self) -> usize {
+        self.gpu_infos.iter().map(|g| g.processes.len()).sum()
+    }
 
+    /// Same order as the process table: flatten then GPU-memory desc.
+    ///
+    /// Selection, kill, yank, and render must all go through this (or
+    /// `selected_process_entry`) so the index never points at different rows.
+    pub fn processes_display_order(&self) -> Vec<(usize, &GpuProcessInfo)> {
+        let mut procs: Vec<_> = self
+            .gpu_infos
+            .iter()
+            .enumerate()
+            .flat_map(|(gpu_index, gpu)| {
+                gpu.processes
+                    .iter()
+                    .map(move |process| (gpu_index, process))
+            })
+            .collect();
+        procs.sort_by_key(|(_, p)| Reverse(p.used_gpu_memory));
+        procs
+    }
+
+    /// Process under the current selection, in display order.
+    pub fn selected_process_entry(&self) -> Option<(usize, &GpuProcessInfo)> {
+        self.processes_display_order()
+            .get(self.selected_process)
+            .copied()
+    }
+}
 
 #[cfg(test)]
 mod tests {

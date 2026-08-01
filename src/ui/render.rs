@@ -2,11 +2,26 @@ use crate::app_state::AppState;
 use crate::gpu::info::GpuInfo;
 use crate::ui::widgets::{render_footer, render_gpu_graphs};
 use crate::utils::formatting::format_memory_size;
+use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table};
-use ratatui::Frame;
+
+/// Extra columns of breathing room around auto-sized content.
+pub(crate) const PADDING: usize = 2;
+
+/// `content_width -> content_width + PADDING` (const fn pointer for maps/arrays).
+pub(crate) const PAD_WIDTH: fn(usize) -> usize = |w| w + PADDING;
+
+fn max_col_width(gpu_infos: &[GpuInfo], floor: usize, measure: impl Fn(&GpuInfo) -> usize) -> usize {
+    gpu_infos
+        .iter()
+        .map(measure)
+        .max()
+        .unwrap_or(0)
+        .max(floor)
+}
 
 pub fn ui(f: &mut Frame, app_state: &AppState) {
     let num_gpus = app_state.gpu_infos.len();
@@ -37,70 +52,38 @@ pub fn render_gpu_info(f: &mut Frame, area: Rect, gpu_infos: &[GpuInfo]) {
     f.render_widget(block.clone(), area);
     let gpu_area = block.inner(area);
 
-    // Calculate maximum widths for each column
-    let max_index_width = gpu_infos
-        .iter()
-        .map(|info| info.index.to_string().len())
-        .max()
-        .unwrap_or(0)
-        .max(3);
-    let max_name_width = gpu_infos
-        .iter()
-        .map(|info| info.name.len())
-        .max()
-        .unwrap_or(0)
-        .max(4);
-    let max_temp_width = gpu_infos
-        .iter()
-        .map(|info| format!("{}°C", info.temperature).len())
-        .max()
-        .unwrap_or(0)
-        .max(4);
-    let max_util_width = gpu_infos
-        .iter()
-        .map(|info| format!("{}%", info.utilization).len())
-        .max()
-        .unwrap_or(0)
-        .max(4);
-    let max_memory_width = gpu_infos
-        .iter()
-        .map(|info| {
+    // Per-column: (header, color, min width, measure). One walk instead of 7 copies.
+    // TODO(theme): hoist these colors into a shared UI palette enum.
+    let columns: [(&str, Color, usize, fn(&GpuInfo) -> usize); 7] = [
+        ("GPU", Color::Cyan, 3, |i| i.index.to_string().len()),
+        ("Name", Color::Green, 4, |i| i.name.len()),
+        ("Temp", Color::Red, 4, |i| format!("{}°C", i.temperature).len()),
+        ("Util", Color::Magenta, 4, |i| format!("{}%", i.utilization).len()),
+        ("Memory", Color::Blue, 6, |i| {
             format!(
                 "{}/{}MB",
-                info.memory_used / 1_048_576,
-                info.memory_total / 1_048_576
+                i.memory_used / 1_048_576,
+                i.memory_total / 1_048_576
             )
             .len()
-        })
-        .max()
-        .unwrap_or(0)
-        .max(6);
-    let max_power_width = gpu_infos
-        .iter()
-        .map(|info| format!("{}/{}W", info.power_usage, info.power_limit).len())
-        .max()
-        .unwrap_or(0)
-        .max(5);
-    let max_clock_width = gpu_infos
-        .iter()
-        .map(|info| format!("{}MHz", info.clock_freq).len())
-        .max()
-        .unwrap_or(0)
-        .max(5);
+        }),
+        ("Power", Color::Yellow, 5, |i| {
+            format!("{}/{}W", i.power_usage, i.power_limit).len()
+        }),
+        ("Clock", Color::LightCyan, 5, |i| {
+            format!("{}MHz", i.clock_freq).len()
+        }),
+    ];
 
-    // Add some padding to each width
-    let index_width = max_index_width + 2;
-    let name_width = max_name_width + 2;
-    let temp_width = max_temp_width + 2;
-    let util_width = max_util_width + 2;
-    let memory_width = max_memory_width + 2;
-    let power_width = max_power_width + 2;
-    let clock_width = max_clock_width + 2;
+    let need_padding: [usize; 7] = std::array::from_fn(|i| {
+        let (_, _, floor, measure) = columns[i];
+        PAD_WIDTH(max_col_width(gpu_infos, floor, measure))
+    });
 
     let rows: Vec<Row> = gpu_infos
         .iter()
         .map(|info| {
-            let cells = vec![
+            Row::new(vec![
                 Cell::from(info.index.to_string()).style(Style::default().fg(Color::Cyan)),
                 Cell::from(info.name.as_str()).style(Style::default().fg(Color::Green)),
                 Cell::from(format!("{}°C", info.temperature))
@@ -117,69 +100,36 @@ pub fn render_gpu_info(f: &mut Frame, area: Rect, gpu_infos: &[GpuInfo]) {
                     .style(Style::default().fg(Color::Yellow)),
                 Cell::from(format!("{}MHz", info.clock_freq))
                     .style(Style::default().fg(Color::LightCyan)),
-            ];
-            Row::new(cells)
+            ])
         })
         .collect();
 
+    let header = Row::new(
+        columns
+            .iter()
+            .map(|(title, color, _, _)| {
+                Cell::from(*title).style(
+                    Style::default()
+                        .fg(*color)
+                        .add_modifier(Modifier::BOLD),
+                )
+            })
+            .collect::<Vec<_>>(),
+    );
+
     let table = Table::new(
         rows,
-        &[
-            Constraint::Length(index_width as u16),
-            Constraint::Length(name_width as u16),
-            Constraint::Length(temp_width as u16),
-            Constraint::Length(util_width as u16),
-            Constraint::Length(memory_width as u16),
-            Constraint::Length(power_width as u16),
-            Constraint::Length(clock_width as u16),
-        ],
+        need_padding
+            .iter()
+            .map(|&w| Constraint::Length(w as u16))
+            .collect::<Vec<Constraint>>(),
     )
-    .header(Row::new(vec![
-        Cell::from("GPU").style(
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Cell::from("Name").style(
-            Style::default()
-                .fg(Color::Green)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Cell::from("Temp").style(Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
-        Cell::from("Util").style(
-            Style::default()
-                .fg(Color::Magenta)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Cell::from("Memory").style(
-            Style::default()
-                .fg(Color::Blue)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Cell::from("Power").style(
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Cell::from("Clock").style(
-            Style::default()
-                .fg(Color::LightCyan)
-                .add_modifier(Modifier::BOLD),
-        ),
-    ]))
-    .widths([
-        Constraint::Length(index_width as u16),
-        Constraint::Length(name_width as u16),
-        Constraint::Length(temp_width as u16),
-        Constraint::Length(util_width as u16),
-        Constraint::Length(memory_width as u16),
-        Constraint::Length(power_width as u16),
-        Constraint::Length(clock_width as u16),
-    ])
+    .header(header)
     .column_spacing(1);
 
     f.render_widget(table, gpu_area);
 }
+
 pub fn render_process_list(f: &mut Frame, area: Rect, app_state: &AppState) {
     let layout = Layout::default()
         .direction(Direction::Vertical)
@@ -195,29 +145,27 @@ pub fn render_process_list(f: &mut Frame, area: Rect, app_state: &AppState) {
     f.render_widget(block.clone(), main_area);
     let process_area = block.inner(main_area);
 
-    let mut all_processes = Vec::new();
-    for (gpu_index, gpu_info) in app_state.gpu_infos.iter().enumerate() {
-        for process in &gpu_info.processes {
-            all_processes.push((gpu_index, process));
-        }
-    }
+    // Same sort/order as kill / yank (AppState::processes_display_order).
+    let all_processes = app_state.processes_display_order();
 
-    all_processes.sort_by(|a, b| b.1.used_gpu_memory.cmp(&a.1.used_gpu_memory));
+    // Pending highlight is constant for the whole frame — compute once.
+    let pending = app_state.pending_op.is_pending();
+    let selected_style = if pending {
+        Style::default()
+            .bg(Color::Yellow)
+            .fg(Color::Black)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().bg(Color::DarkGray)
+    };
 
     let rows: Vec<Row> = all_processes
         .iter()
         .enumerate()
         .map(|(index, (gpu_index, process))| {
-            let style = if index == app_state.selected_process {
-                // Light up the selected row while a multi-key chord is armed (gg / dd).
-                if app_state.pending_op.is_pending() {
-                    Style::default()
-                        .bg(Color::Yellow)
-                        .fg(Color::Black)
-                        .add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default().bg(Color::DarkGray)
-                }
+            let is_selected = index == app_state.selected_process;
+            let style = if is_selected {
+                selected_style
             } else {
                 Style::default()
             };
@@ -235,9 +183,19 @@ pub fn render_process_list(f: &mut Frame, area: Rect, app_state: &AppState) {
         })
         .collect();
 
+    let header_cols: [(&str, Color); 7] = [
+        ("GPU", Color::Cyan),
+        ("PID", Color::Yellow),
+        ("GPU Mem", Color::Green),
+        ("CPU", Color::Magenta),
+        ("Mem", Color::Blue),
+        ("User", Color::Red),
+        ("Command", Color::Reset),
+    ];
+
     let table = Table::new(
         rows,
-        &[
+        [
             Constraint::Length(3),
             Constraint::Length(7),
             Constraint::Length(8),
@@ -247,35 +205,18 @@ pub fn render_process_list(f: &mut Frame, area: Rect, app_state: &AppState) {
             Constraint::Percentage(100),
         ],
     )
-    .header(Row::new(vec![
-        Cell::from("GPU").style(
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Cell::from("PID").style(
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Cell::from("GPU Mem").style(
-            Style::default()
-                .fg(Color::Green)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Cell::from("CPU").style(
-            Style::default()
-                .fg(Color::Magenta)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Cell::from("Mem").style(
-            Style::default()
-                .fg(Color::Blue)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Cell::from("User").style(Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
-        Cell::from("Command").style(Style::default().add_modifier(Modifier::BOLD)),
-    ]))
+    .header(Row::new(
+        header_cols
+            .iter()
+            .map(|(title, color)| {
+                let mut style = Style::default().add_modifier(Modifier::BOLD);
+                if *color != Color::Reset {
+                    style = style.fg(*color);
+                }
+                Cell::from(*title).style(style)
+            })
+            .collect::<Vec<_>>(),
+    ))
     .column_spacing(1);
 
     if let Some(error_msg) = &app_state.error_message {
@@ -293,6 +234,5 @@ pub fn render_process_list(f: &mut Frame, area: Rect, app_state: &AppState) {
     }
 
     f.render_widget(table, process_area);
-    // Render the footer
     render_footer(f, footer_area, app_state);
 }

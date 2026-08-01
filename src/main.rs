@@ -6,7 +6,6 @@ mod ui;
 mod utils;
 
 use crate::gpu::info::collect_gpu_info;
-use crate::gpu::process::GpuProcessInfo;
 use crate::influxdb::{InfluxDBConfig, send_to_influxdb};
 use crate::keybinds::{KeybindAggregate, PendingOp};
 use crate::ui::render::ui;
@@ -175,14 +174,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                         }
                     }
                     KeybindAggregate::Down => {
-                        let total_processes: usize = app_state
-                            .gpu_infos
-                            .iter()
-                            .map(|gpu| gpu.processes.len())
-                            .sum();
-                        if total_processes > 0
-                            && app_state.selected_process < total_processes - 1
-                        {
+                        let total = app_state.total_process_count();
+                        if total > 0 && app_state.selected_process < total - 1 {
                             app_state.selected_process += 1;
                         }
                     }
@@ -214,13 +207,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }
                 KeyCode::Char('G') => {
                     app_state.pending_op = PendingOp::None;
-                    let total_processes: usize = app_state
-                        .gpu_infos
-                        .iter()
-                        .map(|gpu| gpu.processes.len())
-                        .sum();
-                    if total_processes > 0 {
-                        app_state.selected_process = total_processes - 1;
+                    let total = app_state.total_process_count();
+                    if total > 0 {
+                        app_state.selected_process = total - 1;
                     }
                 }
                 KeyCode::Char('d') if ctrl => {
@@ -233,25 +222,12 @@ fn main() -> Result<(), Box<dyn Error>> {
                     // dd - kill selected process (first d arms pending)
                     if app_state.pending_op == PendingOp::Kill {
                         app_state.pending_op = PendingOp::None;
-                        let total_processes: usize = app_state
-                            .gpu_infos
-                            .iter()
-                            .map(|gpu| gpu.processes.len())
-                            .sum();
-                        if app_state.selected_process < total_processes {
-                            let all_processes: Vec<&GpuProcessInfo> = app_state
-                                .gpu_infos
-                                .iter()
-                                .flat_map(|gpu| &gpu.processes)
-                                .collect();
-                            if let Some(process) =
-                                all_processes.get(app_state.selected_process)
+                        // Must match UI display order (GPU mem sort), not raw GPU walk.
+                        if let Some((_gpu, process)) = app_state.selected_process_entry() {
+                            if let Err(e) =
+                                kill_selected_process(process.pid, &process.command)
                             {
-                                if let Err(e) =
-                                    kill_selected_process(process.pid, &process.command)
-                                {
-                                    app_state.error_message = Some(e.to_string());
-                                }
+                                app_state.error_message = Some(e.to_string());
                             }
                         }
                     } else {
