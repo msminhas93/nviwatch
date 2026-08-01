@@ -246,7 +246,7 @@ pub fn render_process_list(f: &mut Frame, area: Rect, app_state: &AppState) {
                 .fg(Color::Green)
                 .add_modifier(Modifier::BOLD),
         ),
-        Cell::from("CPU").style(
+        Cell::from("CPU/up").style(
             Style::default()
                 .fg(Color::Magenta)
                 .add_modifier(Modifier::BOLD),
