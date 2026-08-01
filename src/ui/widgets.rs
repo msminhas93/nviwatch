@@ -73,12 +73,13 @@ pub fn render_tabbed_gpu_graphs(f: &mut Frame, area: Rect, app_state: &AppState)
 }
 
 pub fn render_footer(f: &mut Frame, area: Rect, app_state: &AppState) {
+    // Keep in sync with keybinds.rs / main key handling.
     let footer_text = if app_state.use_tabbed_graphs {
-        "j/k: navigate | gg/G: top/bottom | d: kill | <-/->: switch tabs | Ctrl+d: default | b: bar | q: quit"
+        "↑↓/jk/^p^n: processes | ←→/hl: tabs | gg/G: top/bot | dd: kill | ^d: default | b: bar | q: quit"
     } else if app_state.use_bar_charts {
-        "j/k: navigate | gg/G: top/bottom | d: kill | Ctrl+d: default | t: tabbed | q: quit"
+        "↑↓/jk/^p^n: processes | gg/G: top/bot | dd: kill | ^d: default | t: tabbed | q: quit"
     } else {
-        "j/k: navigate | gg/G: top/bottom | d: kill | Ctrl+d: default | b: bar | t: tabbed | q: quit"
+        "↑↓/jk/^p^n: processes | gg/G: top/bot | dd: kill | ^d: default | t: tabbed | b: bar | q: quit"
     };
 
     let footer = Paragraph::new(footer_text)

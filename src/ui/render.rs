@@ -209,7 +209,15 @@ pub fn render_process_list(f: &mut Frame, area: Rect, app_state: &AppState) {
         .enumerate()
         .map(|(index, (gpu_index, process))| {
             let style = if index == app_state.selected_process {
-                Style::default().bg(Color::DarkGray)
+                // Light up the selected row while a multi-key chord is armed (gg / dd).
+                if app_state.pending_op.is_pending() {
+                    Style::default()
+                        .bg(Color::Yellow)
+                        .fg(Color::Black)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().bg(Color::DarkGray)
+                }
             } else {
                 Style::default()
             };

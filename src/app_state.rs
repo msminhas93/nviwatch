@@ -1,4 +1,5 @@
 use crate::gpu::info::GpuInfo;
+use crate::keybinds::PendingOp;
 
 pub struct AppState {
     pub selected_process: usize,
@@ -9,7 +10,8 @@ pub struct AppState {
     pub utilization_history: Vec<Vec<u64>>,
     pub use_tabbed_graphs: bool,
     pub use_bar_charts: bool,
-    pub pending_g: bool,
+    /// Multi-key chord in progress (`gg` / `dd`).
+    pub pending_op: PendingOp,
 }
 
 
@@ -45,7 +47,7 @@ mod tests {
             utilization_history: vec![],
             use_tabbed_graphs: true,
             use_bar_charts: false,
-            pending_g: false,
+            pending_op: PendingOp::None,
         };
         
         assert_eq!(state.selected_process, 0);
@@ -69,7 +71,7 @@ mod tests {
             utilization_history: vec![],
             use_tabbed_graphs: false,
             use_bar_charts: false,
-            pending_g: false,
+            pending_op: PendingOp::None,
         };
         
         let total_processes: usize = state.gpu_infos.iter().map(|gpu| gpu.processes.len()).sum();
@@ -90,7 +92,7 @@ mod tests {
             utilization_history: vec![],
             use_tabbed_graphs: false,
             use_bar_charts: false,
-            pending_g: false,
+            pending_op: PendingOp::None,
         };
         
         let total_processes: usize = state.gpu_infos.iter().map(|gpu| gpu.processes.len()).sum();
@@ -108,7 +110,7 @@ mod tests {
             utilization_history: vec![],
             use_tabbed_graphs: false,
             use_bar_charts: false,
-            pending_g: false,
+            pending_op: PendingOp::None,
         };
         // Should not be able to select any process when there are no GPUs
         let total_processes: usize = state.gpu_infos.iter().map(|gpu| gpu.processes.len()).sum();
@@ -127,7 +129,7 @@ mod tests {
             utilization_history: vec![],
             use_tabbed_graphs: false,
             use_bar_charts: false,
-            pending_g: false,
+            pending_op: PendingOp::None,
         };
         
         // Should be able to select GPU 0, but not GPU 1
@@ -146,7 +148,7 @@ mod tests {
             utilization_history: vec![],
             use_tabbed_graphs: false,
             use_bar_charts: false,
-            pending_g: false,
+            pending_op: PendingOp::None,
         };
         
         // Initially no error

@@ -1,12 +1,14 @@
 mod app_state;
 mod gpu;
 mod influxdb;
+mod keybinds;
 mod ui;
 mod utils;
 
 use crate::gpu::info::collect_gpu_info;
 use crate::gpu::process::GpuProcessInfo;
 use crate::influxdb::{InfluxDBConfig, send_to_influxdb};
+use crate::keybinds::{KeybindAggregate, PendingOp};
 use crate::ui::render::ui;
 use crate::utils::system::kill_selected_process;
 use app_state::AppState;
@@ -114,7 +116,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         utilization_history: Vec::new(),
         use_tabbed_graphs,
         use_bar_charts,
-        pending_g: false,
+        pending_op: PendingOp::None,
     };
 
     loop {
@@ -145,51 +147,73 @@ fn main() -> Result<(), Box<dyn Error>> {
         if event::poll(Duration::from_millis(100))?
             && let Event::Key(key) = event::read()?
         {
-            // Reset gg pending state on any non-g keypress
-            if !matches!(key.code, KeyCode::Char('g')) {
-                app_state.pending_g = false;
+            let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+
+            // Chord second keys are handled below; anything else clears pending.
+            let is_chord_second = matches!(
+                (app_state.pending_op, key.code, ctrl),
+                (PendingOp::GoTop, KeyCode::Char('g'), false)
+                    | (PendingOp::Kill, KeyCode::Char('d'), false)
+            );
+            if app_state.pending_op.is_pending() && !is_chord_second {
+                // Still allow starting a different chord / dedicated keys below;
+                // clear first so stale pending does not stick across unrelated keys.
+                if !matches!(
+                    (key.code, ctrl),
+                    (KeyCode::Char('g'), false) | (KeyCode::Char('d'), false)
+                ) {
+                    app_state.pending_op = PendingOp::None;
+                }
+            }
+
+            if let Some(nav) = KeybindAggregate::try_from(&key).ok() {
+                app_state.pending_op = PendingOp::None;
+                match nav {
+                    KeybindAggregate::Up => {
+                        if app_state.selected_process > 0 {
+                            app_state.selected_process -= 1;
+                        }
+                    }
+                    KeybindAggregate::Down => {
+                        let total_processes: usize = app_state
+                            .gpu_infos
+                            .iter()
+                            .map(|gpu| gpu.processes.len())
+                            .sum();
+                        if total_processes > 0
+                            && app_state.selected_process < total_processes - 1
+                        {
+                            app_state.selected_process += 1;
+                        }
+                    }
+                    KeybindAggregate::Left => {
+                        if app_state.use_tabbed_graphs && app_state.selected_gpu_tab > 0 {
+                            app_state.selected_gpu_tab -= 1;
+                        }
+                    }
+                    KeybindAggregate::Right => {
+                        if app_state.use_tabbed_graphs
+                            && app_state.selected_gpu_tab < app_state.gpu_infos.len() - 1
+                        {
+                            app_state.selected_gpu_tab += 1;
+                        }
+                    }
+                }
+                continue;
             }
 
             match key.code {
                 KeyCode::Char('q') => break,
-                KeyCode::Up | KeyCode::Char('k') => {
-                    if app_state.selected_process > 0 {
-                        app_state.selected_process -= 1;
-                    }
-                }
-                KeyCode::Down | KeyCode::Char('j') => {
-                    let total_processes: usize = app_state
-                        .gpu_infos
-                        .iter()
-                        .map(|gpu| gpu.processes.len())
-                        .sum();
-                    if total_processes > 0 && app_state.selected_process < total_processes - 1 {
-                        app_state.selected_process += 1;
-                    }
-                }
-                KeyCode::Left | KeyCode::Char('h') => {
-                    if app_state.use_tabbed_graphs && app_state.selected_gpu_tab > 0 {
-                        app_state.selected_gpu_tab -= 1;
-                    }
-                }
-                KeyCode::Right | KeyCode::Char('l') => {
-                    if app_state.use_tabbed_graphs
-                        && app_state.selected_gpu_tab < app_state.gpu_infos.len() - 1
-                    {
-                        app_state.selected_gpu_tab += 1;
-                    }
-                }
-                KeyCode::Char('g') => {
-                    if app_state.pending_g {
-                        // gg - go to top
+                KeyCode::Char('g') if !ctrl => {
+                    if app_state.pending_op == PendingOp::GoTop {
                         app_state.selected_process = 0;
-                        app_state.pending_g = false;
+                        app_state.pending_op = PendingOp::None;
                     } else {
-                        app_state.pending_g = true;
+                        app_state.pending_op = PendingOp::GoTop;
                     }
                 }
                 KeyCode::Char('G') => {
-                    // G - go to bottom
+                    app_state.pending_op = PendingOp::None;
                     let total_processes: usize = app_state
                         .gpu_infos
                         .iter()
@@ -199,36 +223,48 @@ fn main() -> Result<(), Box<dyn Error>> {
                         app_state.selected_process = total_processes - 1;
                     }
                 }
-                KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                KeyCode::Char('d') if ctrl => {
                     // Ctrl+d - default mode
+                    app_state.pending_op = PendingOp::None;
                     app_state.use_tabbed_graphs = false;
                     app_state.use_bar_charts = false;
                 }
                 KeyCode::Char('d') => {
-                    // d - kill selected process
-                    let total_processes: usize = app_state
-                        .gpu_infos
-                        .iter()
-                        .map(|gpu| gpu.processes.len())
-                        .sum();
-                    if app_state.selected_process < total_processes {
-                        let all_processes: Vec<&GpuProcessInfo> = app_state
+                    // dd - kill selected process (first d arms pending)
+                    if app_state.pending_op == PendingOp::Kill {
+                        app_state.pending_op = PendingOp::None;
+                        let total_processes: usize = app_state
                             .gpu_infos
                             .iter()
-                            .flat_map(|gpu| &gpu.processes)
-                            .collect();
-                        if let Some(process) = all_processes.get(app_state.selected_process) {
-                            if let Err(e) = kill_selected_process(process.pid, &process.command) {
-                                app_state.error_message = Some(e.to_string());
+                            .map(|gpu| gpu.processes.len())
+                            .sum();
+                        if app_state.selected_process < total_processes {
+                            let all_processes: Vec<&GpuProcessInfo> = app_state
+                                .gpu_infos
+                                .iter()
+                                .flat_map(|gpu| &gpu.processes)
+                                .collect();
+                            if let Some(process) =
+                                all_processes.get(app_state.selected_process)
+                            {
+                                if let Err(e) =
+                                    kill_selected_process(process.pid, &process.command)
+                                {
+                                    app_state.error_message = Some(e.to_string());
+                                }
                             }
                         }
+                    } else {
+                        app_state.pending_op = PendingOp::Kill;
                     }
                 }
                 KeyCode::Char('t') => {
+                    app_state.pending_op = PendingOp::None;
                     app_state.use_tabbed_graphs = true;
                     app_state.use_bar_charts = false;
                 }
                 KeyCode::Char('b') => {
+                    app_state.pending_op = PendingOp::None;
                     app_state.use_tabbed_graphs = false;
                     app_state.use_bar_charts = true;
                 }
