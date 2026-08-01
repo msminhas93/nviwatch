@@ -26,10 +26,25 @@ pub struct GpuInfo {
     pub processes: Vec<GpuProcessInfo>,
 }
 
+/// Map NVML process infos into `GpuProcessInfo`, resolving used GPU memory.
+fn collect_gpu_processes(
+    processes: impl IntoIterator<Item = nvml::struct_wrappers::device::ProcessInfo>,
+) -> Vec<GpuProcessInfo> {
+    processes
+        .into_iter()
+        .filter_map(|p| {
+            let used_gpu_memory = match p.used_gpu_memory {
+                nvml::enums::device::UsedGpuMemory::Used(bytes) => bytes,
+                nvml::enums::device::UsedGpuMemory::Unavailable => 0,
+            };
+            get_process_info(p.pid, used_gpu_memory)
+        })
+        .collect()
+}
+
 impl TryFrom<(usize, Device<'_>)> for GpuInfo {
     type Error = NviError;
 
-    // TODO: Can probably streamline this a fair bit. Literally just moved the existing code over
     fn try_from(device_data: (usize, Device<'_>)) -> std::result::Result<Self, Self::Error> {
         let index = device_data.0;
         let device = device_data.1;
@@ -43,29 +58,8 @@ impl TryFrom<(usize, Device<'_>)> for GpuInfo {
         let power_limit = device.enforced_power_limit()? / 1000; // Convert mW to W
         let clock_freq = device.clock_info(nvml::enum_wrappers::device::Clock::Graphics)?;
 
-        let compute_processes: Vec<GpuProcessInfo> = device
-            .running_compute_processes()?
-            .into_iter()
-            .filter_map(|p| {
-                let used_gpu_memory = match p.used_gpu_memory {
-                    nvml::enums::device::UsedGpuMemory::Used(bytes) => bytes,
-                    nvml::enums::device::UsedGpuMemory::Unavailable => 0,
-                };
-                get_process_info(p.pid, used_gpu_memory)
-            })
-            .collect();
-
-        let graphics_processes: Vec<GpuProcessInfo> = device
-            .running_graphics_processes()?
-            .into_iter()
-            .filter_map(|p| {
-                let used_gpu_memory = match p.used_gpu_memory {
-                    nvml::enums::device::UsedGpuMemory::Used(bytes) => bytes,
-                    nvml::enums::device::UsedGpuMemory::Unavailable => 0,
-                };
-                get_process_info(p.pid, used_gpu_memory)
-            })
-            .collect();
+        let compute_processes = collect_gpu_processes(device.running_compute_processes()?);
+        let graphics_processes = collect_gpu_processes(device.running_graphics_processes()?);
 
         Ok(GpuInfo {
             index,
