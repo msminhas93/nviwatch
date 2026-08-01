@@ -83,7 +83,7 @@ impl From<&GpuInfo> for WriteQuery {
             .unwrap_or_else(|_| std::time::Duration::from_secs(0))
             .as_nanos();
 
-        // TODO: But can we optimize this? (for perf or just... make it simpler?)
+        // clone required by WriteQuery tags (Type::Text owns String; API has no Cow path)
         WriteQuery::new(influxdb::Timestamp::Nanoseconds(ts), "gpu_metrics")
             .add_tag("gpu_index", gpu.index.to_string())
             .add_tag("gpu_name", gpu.name.clone())
