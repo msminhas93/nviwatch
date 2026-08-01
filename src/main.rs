@@ -93,6 +93,9 @@ fn main() -> Result<()> {
 
     let nvml = Nvml::init()?;
 
+    // Create the runtime before raw/alternate screen so a failure never wedges the terminal.
+    let runtime = tokio::runtime::Runtime::new()?;
+
     let mut stdout = stdout();
     execute!(stdout, EnterAlternateScreen)?;
     enable_raw_mode()?;
@@ -108,11 +111,6 @@ fn main() -> Result<()> {
     let mut terminal = Terminal::new(backend)?;
 
     let mut app_state = AppState::from(&matches);
-
-    // BUG: [tokio-runtime] : Runtime::new().expect(...) can panic before the
-    //   terminal is cleaned up. Prefer a fallible path that restores the terminal,
-    //   or create the runtime before entering raw/alternate screen mode.
-    let runtime = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime");
 
     loop {
         if app_state.should_update(watch_interval) {
