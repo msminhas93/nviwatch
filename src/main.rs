@@ -97,12 +97,16 @@ fn main() -> Result<()> {
     execute!(stdout, EnterAlternateScreen)?;
     enable_raw_mode()?;
 
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = disable_raw_mode();
+        let _ = execute!(std::io::stdout(), LeaveAlternateScreen);
+        default_hook(info);
+    }));
+
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    // BUG: [panics] : No panic hook installed; if the app panics, raw mode stays on
-    //   and the alternate screen lingers. Should install a panic hook that restores
-    //   terminal state before re-panicking.
     let mut app_state = AppState::from(&matches);
 
     // BUG: [tokio-runtime] : Runtime::new().expect(...) can panic before the
