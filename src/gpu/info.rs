@@ -97,14 +97,15 @@ impl From<&GpuInfo> for WriteQuery {
     }
 }
 
+/// Max samples kept per GPU for the ~1-minute power/utilization graphs (~1s interval).
 const HISTORY_CAP: usize = 60;
 
 // Called from AppState::update on each poll interval (not every UI frame).
 pub fn collect_gpu_info(nvml: &Nvml, app_state: &mut AppState) -> Result<Vec<GpuInfo>> {
-    let device_count = nvml.device_count()?;
+    let device_count = nvml.device_count()? as usize;
     let mut gpu_infos = Vec::new();
 
-    for index in 0..device_count as usize {
+    for index in 0..device_count {
         let device = nvml.device_by_index(index as u32)?;
 
         let gpu_info = GpuInfo::try_from((index, device))?;
@@ -119,19 +120,19 @@ pub fn collect_gpu_info(nvml: &Nvml, app_state: &mut AppState) -> Result<Vec<Gpu
         app_state.power_history[index].push(gpu_info.power_usage as u64);
         app_state.utilization_history[index].push(gpu_info.utilization as u64);
 
-        // Keep only the last 60 data points (for a 1-minute graph at ~1s intervals)
-        // BUG: [history-growth] : History arrays use a fixed cap of 60 entries,
-        //   but the cap is hardcoded and not configurable. Also, the initial check
-        //   only grows arrays when index >= len, meaning if GPU count decreases at
-        //   runtime the arrays shrink lazily but never compact. Low risk for typical
-        //   use but worth tracking.
-        if app_state.power_history[index].len() > 60 {
-            let excess = app_state.power_history[index].len() - 60;
+        // Keep only the last HISTORY_CAP data points (1-minute graph at ~1s intervals)
+        if app_state.power_history[index].len() > HISTORY_CAP {
+            let excess = app_state.power_history[index].len() - HISTORY_CAP;
             app_state.power_history[index].drain(..excess);
             app_state.utilization_history[index].drain(..excess);
         }
 
         gpu_infos.push(gpu_info);
+    }
+
+    if device_count < app_state.power_history.len() {
+        app_state.power_history.truncate(device_count);
+        app_state.utilization_history.truncate(device_count);
     }
 
     Ok(gpu_infos)
