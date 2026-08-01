@@ -17,6 +17,12 @@ pub fn render_gpu_graphs(f: &mut Frame, area: Rect, app_state: &AppState) {
 }
 pub fn render_gpu_bar_charts(f: &mut Frame, area: Rect, app_state: &AppState) {
     let gpu_count = app_state.gpu_infos.len();
+    // BUG: [div-by-zero] : render_gpu_bar_charts does not guard against gpu_count == 0;
+    //   100 / gpu_count on line below will panic if no GPUs are present.
+    //   Compare to render_all_gpu_graphs which has a guard.
+    if gpu_count == 0 {
+        return;
+    }
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints(vec![

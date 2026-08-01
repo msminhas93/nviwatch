@@ -7,6 +7,9 @@ use nix::unistd::{Uid, User};
 use procfs::process::Process;
 
 pub fn get_process_info(pid: u32, used_gpu_memory: u64) -> Option<GpuProcessInfo> {
+    // BUG: [cpu-usage] : CPU usage is computed as lifetime total_time / uptime,
+    //   giving process lifetime average CPU, not current utilization. Needs
+    //   delta-based sampling between two stat snapshots for meaningful readings.
     let process = Process::new(pid as i32).ok()?;
     let uid = process.uid().ok()?;
     let user = User::from_uid(Uid::from_raw(uid)).ok().flatten()?;

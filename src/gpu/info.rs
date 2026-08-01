@@ -126,6 +126,11 @@ pub fn collect_gpu_info(nvml: &Nvml, app_state: &mut AppState) -> Result<Vec<Gpu
         app_state.utilization_history[index].push(gpu_info.utilization as u64);
 
         // Keep only the last 60 data points (for a 1-minute graph at ~1s intervals)
+        // BUG: [history-growth] : History arrays use a fixed cap of 60 entries,
+        //   but the cap is hardcoded and not configurable. Also, the initial check
+        //   only grows arrays when index >= len, meaning if GPU count decreases at
+        //   runtime the arrays shrink lazily but never compact. Low risk for typical
+        //   use but worth tracking.
         if app_state.power_history[index].len() > 60 {
             let excess = app_state.power_history[index].len() - 60;
             app_state.power_history[index].drain(..excess);

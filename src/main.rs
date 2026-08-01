@@ -100,8 +100,14 @@ fn main() -> Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
+    // BUG: [panics] : No panic hook installed; if the app panics, raw mode stays on
+    //   and the alternate screen lingers. Should install a panic hook that restores
+    //   terminal state before re-panicking.
     let mut app_state = AppState::from(&matches);
 
+    // BUG: [tokio-runtime] : Runtime::new().expect(...) can panic before the
+    //   terminal is cleaned up. Prefer a fallible path that restores the terminal,
+    //   or create the runtime before entering raw/alternate screen mode.
     let runtime = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime");
 
     loop {

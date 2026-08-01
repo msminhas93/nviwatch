@@ -122,6 +122,8 @@ pub fn render_gpu_info(f: &mut Frame, area: Rect, gpu_infos: &[GpuInfo]) {
         })
         .collect();
 
+    // BUG: [table-widths] : Table::new() takes widths via second arg, then .widths() sets
+    //   them again below -- redundant, pick one. Both are currently identical.
     let table = Table::new(
         rows,
         &[
