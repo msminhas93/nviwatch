@@ -1,7 +1,9 @@
+cargo-features = [ "codegen-backend", "trim-paths" ]
+
 [package]
 name = "nviwatch"
 version = "0.2.1"
-edition = "2021"
+edition = "2024"
 description = "A blazingly fast Rust-based TUI for managing and monitoring NVIDIA GPU processes"
 license = "GPL-3.0"
 authors = ["Manpreet Singh Minhas <msminhas@uwaterloo.ca>"]
@@ -13,15 +15,50 @@ keywords = ["nvidia", "gpu", "monitoring", "tui", "system-monitor"]
 categories = ["command-line-utilities", "visualization", "hardware-support"]
 
 
-
 [dependencies]
 clap = "4.5.45"
 crossterm = "0.29.0"
 nix = { version = "0.30.1", features = ["process", "signal", "user"] }
-nvml-wrapper = "0.11.0"
+nvml = { version = "0.11.0", package = "nvml-wrapper" }
 prettytable-rs = "0.10.0"
 procfs = "0.17.0"
 ratatui = "0.29.0"
 textwrap = "0.16.2"
 influxdb = { version = "0.7.2", features = ["derive"] }
 tokio = { version = "1.47.1", features = ["full"] }
+
+
+# Build profiles (from rust_template)
+[profile.dev]
+opt-level        = 1
+codegen-units    = 256
+incremental      = true
+codegen-backend  = "cranelift"
+debug            = "line-tables-only"
+debug-assertions = true
+overflow-checks  = true
+strip            = "none"
+panic            = "abort"
+lto              = "off"
+trim-paths       = "none"
+
+[profile.release]
+opt-level        = 3
+codegen-units    = 1
+incremental      = false
+codegen-backend  = "cranelift"
+debug            = "none"
+debug-assertions = false
+overflow-checks  = false
+strip            = "symbols"
+panic            = "unwind"
+lto              = "off"
+trim-paths       = [ "diagnostics", "object" ]
+
+[profile.dev.package."*"]
+inherits        = "release"
+codegen-backend = "cranelift"
+
+[profile.release.package."*"]
+inherits        = "release"
+codegen-backend = "cranelift"
