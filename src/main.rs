@@ -8,7 +8,7 @@ mod utils;
 use crate::error::NviError;
 use crate::gpu::GpuProcessInfo;
 use crate::gpu::info::collect_gpu_info;
-use crate::influx_local::InfluxDBConfig;
+use crate::influx_local::{InfluxDBConfig, TempInfluxConfig};
 use crate::ui::render::ui;
 use crate::utils::system::kill_selected_process;
 use app_state::AppState;
@@ -118,26 +118,30 @@ fn main() -> Result<()> {
 
             app_state.gpu_infos = collect_gpu_info(&nvml, &mut app_state)?;
 
-            let config = InfluxDBConfig::try_from(&matches)?;
-            let influx_client =
-                influxdb::Client::new(&config.url, &config.bucket).with_token(&config.token);
-            let queries: Vec<influxdb::WriteQuery> = app_state
-                .gpu_infos
-                .iter()
-                .map(influxdb::WriteQuery::from)
-                .collect();
+            // Skip Influx unless all four --influx-* flags are present.
+            // Incomplete/missing config is not an error (app still runs).
+            let temp = TempInfluxConfig::try_from(&matches)?;
+            if let Ok(config) = InfluxDBConfig::try_from(&temp) {
+                let influx_client =
+                    influxdb::Client::new(&config.url, &config.bucket).with_token(&config.token);
+                let queries: Vec<influxdb::WriteQuery> = app_state
+                    .gpu_infos
+                    .iter()
+                    .map(influxdb::WriteQuery::from)
+                    .collect();
 
-            runtime
-                .block_on(async {
-                    influx_client
-                        .query(queries)
-                        .await
-                        .map_err(|e| NviError::General(format!("InfluxDB Error: {}", e)))
-                })
-                .inspect_err(|e| {
-                    app_state.error_message = Some(e.to_string());
-                })
-                .ok();
+                runtime
+                    .block_on(async {
+                        influx_client
+                            .query(queries)
+                            .await
+                            .map_err(|e| NviError::General(format!("InfluxDB Error: {}", e)))
+                    })
+                    .inspect_err(|e| {
+                        app_state.error_message = Some(e.to_string());
+                    })
+                    .ok();
+            }
         }
 
         terminal.draw(|f| ui(f, &app_state))?;
