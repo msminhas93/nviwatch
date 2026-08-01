@@ -1,76 +1,11 @@
 use crate::gpu::info::GpuInfo;
 
-// #[derive(Default)]
-// pub struct PowerHistory(Vec<Vec<u64>>);
-//
-// impl AsRef<Vec<Vec<u64>>> for PowerHistory {
-//     fn as_ref(&self) -> &Vec<Vec<u64>> {
-//         &self.0
-//     }
-// }
-//
-// impl AsMut<Vec<Vec<u64>>> for PowerHistory {
-//     fn as_mut(&mut self) -> &mut Vec<Vec<u64>> {
-//         &mut self.0
-//     }
-// }
-//
-// impl PowerHistory {
-//     pub fn len(&self) -> usize {
-//         self.0.len()
-//     }
-//
-//     pub fn push(&mut self, index: usize, gpu_power_data: u64) {
-//         if self.0.len() <= index {
-//             self.0.push(Vec::new());
-//         }
-//         self.0[index].push(gpu_power_data);
-//     }
-//
-//     pub fn bounds(&self) -> (u64, u64) {
-//         let mut min = u64::MAX;
-//         let mut max = u64::MIN;
-//
-//         for gpu_data in &self.0 {
-//             for &value in gpu_data {
-//                 if value < min {
-//                     min = value;
-//                 }
-//                 if value > max {
-//                     max = value;
-//                 }
-//             }
-//         }
-//
-//         (min, max)
-//     }
-//
-//     pub fn drain<R>(&mut self, range: R)
-//     where
-//         R: RangeBounds<usize> + Clone,
-//     {
-//         let excess = self.0.len().saturating_sub(100);
-//         if excess > 0 {
-//             self.0.drain(range);
-//         }
-//     }
-// }
-//
-// impl std::ops::Index<usize> for PowerHistory {
-//     type Output = Vec<u64>;
-//
-//     fn index(&self, index: usize) -> &Self::Output {
-//         &self.0[index]
-//     }
-// }
-
 pub struct AppState {
     last_update: std::time::Instant,
     pub selected_process: usize,
     pub selected_gpu_tab: usize,
     pub gpu_infos: Vec<GpuInfo>,
     pub error_message: Option<String>,
-    // pub power_history: PowerHistory,
     pub power_history: Vec<Vec<u64>>,
     pub utilization_history: Vec<Vec<u64>>,
     pub use_tabbed_graphs: bool,
