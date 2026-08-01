@@ -122,8 +122,6 @@ pub fn render_gpu_info(f: &mut Frame, area: Rect, gpu_infos: &[GpuInfo]) {
         })
         .collect();
 
-    // BUG: [table-widths] : Table::new() takes widths via second arg, then .widths() sets
-    //   them again below -- redundant, pick one. Both are currently identical.
     let table = Table::new(
         rows,
         &[
@@ -169,15 +167,6 @@ pub fn render_gpu_info(f: &mut Frame, area: Rect, gpu_infos: &[GpuInfo]) {
                 .add_modifier(Modifier::BOLD),
         ),
     ]))
-    .widths([
-        Constraint::Length(index_width as u16),
-        Constraint::Length(name_width as u16),
-        Constraint::Length(temp_width as u16),
-        Constraint::Length(util_width as u16),
-        Constraint::Length(memory_width as u16),
-        Constraint::Length(power_width as u16),
-        Constraint::Length(clock_width as u16),
-    ])
     .column_spacing(1);
 
     f.render_widget(table, gpu_area);
@@ -257,7 +246,7 @@ pub fn render_process_list(f: &mut Frame, area: Rect, app_state: &AppState) {
                 .fg(Color::Green)
                 .add_modifier(Modifier::BOLD),
         ),
-        Cell::from("CPU").style(
+        Cell::from("CPU/up").style(
             Style::default()
                 .fg(Color::Magenta)
                 .add_modifier(Modifier::BOLD),

@@ -26,10 +26,25 @@ pub struct GpuInfo {
     pub processes: Vec<GpuProcessInfo>,
 }
 
+/// Map NVML process infos into `GpuProcessInfo`, resolving used GPU memory.
+fn collect_gpu_processes(
+    processes: impl IntoIterator<Item = nvml::struct_wrappers::device::ProcessInfo>,
+) -> Vec<GpuProcessInfo> {
+    processes
+        .into_iter()
+        .filter_map(|p| {
+            let used_gpu_memory = match p.used_gpu_memory {
+                nvml::enums::device::UsedGpuMemory::Used(bytes) => bytes,
+                nvml::enums::device::UsedGpuMemory::Unavailable => 0,
+            };
+            get_process_info(p.pid, used_gpu_memory)
+        })
+        .collect()
+}
+
 impl TryFrom<(usize, Device<'_>)> for GpuInfo {
     type Error = NviError;
 
-    // TODO: Can probably streamline this a fair bit. Literally just moved the existing code over
     fn try_from(device_data: (usize, Device<'_>)) -> std::result::Result<Self, Self::Error> {
         let index = device_data.0;
         let device = device_data.1;
@@ -43,29 +58,8 @@ impl TryFrom<(usize, Device<'_>)> for GpuInfo {
         let power_limit = device.enforced_power_limit()? / 1000; // Convert mW to W
         let clock_freq = device.clock_info(nvml::enum_wrappers::device::Clock::Graphics)?;
 
-        let compute_processes: Vec<GpuProcessInfo> = device
-            .running_compute_processes()?
-            .into_iter()
-            .filter_map(|p| {
-                let used_gpu_memory = match p.used_gpu_memory {
-                    nvml::enums::device::UsedGpuMemory::Used(bytes) => bytes,
-                    nvml::enums::device::UsedGpuMemory::Unavailable => 0,
-                };
-                get_process_info(p.pid, used_gpu_memory)
-            })
-            .collect();
-
-        let graphics_processes: Vec<GpuProcessInfo> = device
-            .running_graphics_processes()?
-            .into_iter()
-            .filter_map(|p| {
-                let used_gpu_memory = match p.used_gpu_memory {
-                    nvml::enums::device::UsedGpuMemory::Used(bytes) => bytes,
-                    nvml::enums::device::UsedGpuMemory::Unavailable => 0,
-                };
-                get_process_info(p.pid, used_gpu_memory)
-            })
-            .collect();
+        let compute_processes = collect_gpu_processes(device.running_compute_processes()?);
+        let graphics_processes = collect_gpu_processes(device.running_graphics_processes()?);
 
         Ok(GpuInfo {
             index,
@@ -89,7 +83,7 @@ impl From<&GpuInfo> for WriteQuery {
             .unwrap_or_else(|_| std::time::Duration::from_secs(0))
             .as_nanos();
 
-        // TODO: But can we optimize this? (for perf or just... make it simpler?)
+        // clone required by WriteQuery tags (Type::Text owns String; API has no Cow path)
         WriteQuery::new(influxdb::Timestamp::Nanoseconds(ts), "gpu_metrics")
             .add_tag("gpu_index", gpu.index.to_string())
             .add_tag("gpu_name", gpu.name.clone())
@@ -103,14 +97,15 @@ impl From<&GpuInfo> for WriteQuery {
     }
 }
 
+/// Max samples kept per GPU for the ~1-minute power/utilization graphs (~1s interval).
 const HISTORY_CAP: usize = 60;
 
 // Called from AppState::update on each poll interval (not every UI frame).
 pub fn collect_gpu_info(nvml: &Nvml, app_state: &mut AppState) -> Result<Vec<GpuInfo>> {
-    let device_count = nvml.device_count()?;
+    let device_count = nvml.device_count()? as usize;
     let mut gpu_infos = Vec::new();
 
-    for index in 0..device_count as usize {
+    for index in 0..device_count {
         let device = nvml.device_by_index(index as u32)?;
 
         let gpu_info = GpuInfo::try_from((index, device))?;
@@ -125,19 +120,19 @@ pub fn collect_gpu_info(nvml: &Nvml, app_state: &mut AppState) -> Result<Vec<Gpu
         app_state.power_history[index].push(gpu_info.power_usage as u64);
         app_state.utilization_history[index].push(gpu_info.utilization as u64);
 
-        // Keep only the last 60 data points (for a 1-minute graph at ~1s intervals)
-        // BUG: [history-growth] : History arrays use a fixed cap of 60 entries,
-        //   but the cap is hardcoded and not configurable. Also, the initial check
-        //   only grows arrays when index >= len, meaning if GPU count decreases at
-        //   runtime the arrays shrink lazily but never compact. Low risk for typical
-        //   use but worth tracking.
-        if app_state.power_history[index].len() > 60 {
-            let excess = app_state.power_history[index].len() - 60;
+        // Keep only the last HISTORY_CAP data points (1-minute graph at ~1s intervals)
+        if app_state.power_history[index].len() > HISTORY_CAP {
+            let excess = app_state.power_history[index].len() - HISTORY_CAP;
             app_state.power_history[index].drain(..excess);
             app_state.utilization_history[index].drain(..excess);
         }
 
         gpu_infos.push(gpu_info);
+    }
+
+    if device_count < app_state.power_history.len() {
+        app_state.power_history.truncate(device_count);
+        app_state.utilization_history.truncate(device_count);
     }
 
     Ok(gpu_infos)
