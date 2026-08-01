@@ -1,4 +1,8 @@
-use crate::gpu::info::GpuInfo;
+use crate::Result;
+use crate::error::NviError;
+use crate::gpu::info::{GpuInfo, collect_gpu_info};
+use crate::influx_local::{InfluxDBConfig, TempInfluxConfig};
+use nvml::Nvml;
 
 pub struct AppState {
     last_update: std::time::Instant,
@@ -58,6 +62,47 @@ impl AppState {
             self.last_update = std::time::Instant::now();
             true
         }
+    }
+
+    /// Poll GPU info and optionally write metrics to InfluxDB.
+    ///
+    /// Influx is skipped unless all four `--influx-*` flags are present (same
+    /// as the original main-loop guard). Partial/missing config is not an error.
+    pub fn update(
+        &mut self,
+        nvml: &Nvml,
+        matches: &clap::ArgMatches,
+        runtime: &tokio::runtime::Runtime,
+    ) -> Result<()> {
+        self.gpu_infos = collect_gpu_info(nvml, self)?;
+
+        let temp = TempInfluxConfig::try_from(matches)?;
+        let Ok(config) = InfluxDBConfig::try_from(&temp) else {
+            // No / incomplete influx flags: GPU poll still succeeded.
+            return Ok(());
+        };
+
+        let influx_client =
+            influxdb::Client::new(&config.url, &config.bucket).with_token(&config.token);
+        let queries: Vec<influxdb::WriteQuery> = self
+            .gpu_infos
+            .iter()
+            .map(influxdb::WriteQuery::from)
+            .collect();
+
+        runtime
+            .block_on(async {
+                influx_client
+                    .query(queries)
+                    .await
+                    .map_err(|e| NviError::General(format!("InfluxDB Error: {}", e)))
+            })
+            .inspect_err(|e| {
+                self.error_message = Some(e.to_string());
+            })
+            .ok();
+
+        Ok(())
     }
 }
 
