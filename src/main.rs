@@ -4,8 +4,6 @@ mod influxdb;
 mod ui;
 mod utils;
 
-extern crate nvml_wrapper as nvml;
-
 use crate::gpu::info::collect_gpu_info;
 use crate::influxdb::{send_to_influxdb, InfluxDBConfig};
 use crate::ui::render::ui;
