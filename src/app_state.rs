@@ -1,10 +1,76 @@
 use crate::gpu::info::GpuInfo;
 
+// #[derive(Default)]
+// pub struct PowerHistory(Vec<Vec<u64>>);
+//
+// impl AsRef<Vec<Vec<u64>>> for PowerHistory {
+//     fn as_ref(&self) -> &Vec<Vec<u64>> {
+//         &self.0
+//     }
+// }
+//
+// impl AsMut<Vec<Vec<u64>>> for PowerHistory {
+//     fn as_mut(&mut self) -> &mut Vec<Vec<u64>> {
+//         &mut self.0
+//     }
+// }
+//
+// impl PowerHistory {
+//     pub fn len(&self) -> usize {
+//         self.0.len()
+//     }
+//
+//     pub fn push(&mut self, index: usize, gpu_power_data: u64) {
+//         if self.0.len() <= index {
+//             self.0.push(Vec::new());
+//         }
+//         self.0[index].push(gpu_power_data);
+//     }
+//
+//     pub fn bounds(&self) -> (u64, u64) {
+//         let mut min = u64::MAX;
+//         let mut max = u64::MIN;
+//
+//         for gpu_data in &self.0 {
+//             for &value in gpu_data {
+//                 if value < min {
+//                     min = value;
+//                 }
+//                 if value > max {
+//                     max = value;
+//                 }
+//             }
+//         }
+//
+//         (min, max)
+//     }
+//
+//     pub fn drain<R>(&mut self, range: R)
+//     where
+//         R: RangeBounds<usize> + Clone,
+//     {
+//         let excess = self.0.len().saturating_sub(100);
+//         if excess > 0 {
+//             self.0.drain(range);
+//         }
+//     }
+// }
+//
+// impl std::ops::Index<usize> for PowerHistory {
+//     type Output = Vec<u64>;
+//
+//     fn index(&self, index: usize) -> &Self::Output {
+//         &self.0[index]
+//     }
+// }
+
 pub struct AppState {
+    last_update: std::time::Instant,
     pub selected_process: usize,
     pub selected_gpu_tab: usize,
     pub gpu_infos: Vec<GpuInfo>,
     pub error_message: Option<String>,
+    // pub power_history: PowerHistory,
     pub power_history: Vec<Vec<u64>>,
     pub utilization_history: Vec<Vec<u64>>,
     pub use_tabbed_graphs: bool,
@@ -12,7 +78,53 @@ pub struct AppState {
     pub pending_g: bool,
 }
 
+impl Default for AppState {
+    fn default() -> Self {
+        Self {
+            last_update: std::time::Instant::now(),
+            selected_process: 0,
+            selected_gpu_tab: 0,
+            gpu_infos: Vec::new(),
+            error_message: None,
+            power_history: Vec::new(),
+            utilization_history: Vec::new(),
+            use_tabbed_graphs: false,
+            use_bar_charts: false,
+            pending_g: false,
+        }
+    }
+}
 
+impl From<&clap::ArgMatches> for AppState {
+    fn from(matches: &clap::ArgMatches) -> Self {
+        let use_tabbed_graphs = matches.get_flag("tabbed-graphs");
+        let use_bar_charts = matches.get_flag("bar-chart");
+
+        Self {
+            last_update: std::time::Instant::now(),
+            selected_process: 0,
+            selected_gpu_tab: 0,
+            gpu_infos: Vec::new(),
+            error_message: None,
+            power_history: Vec::new(),
+            utilization_history: Vec::new(),
+            use_tabbed_graphs,
+            use_bar_charts,
+            pending_g: false,
+        }
+    }
+}
+
+impl AppState {
+    pub fn should_update(&mut self, interval_ms: u64) -> bool {
+        if self.last_update.elapsed() < std::time::Duration::from_millis(interval_ms) {
+            false
+        } else {
+            self.last_update = std::time::Instant::now();
+            true
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -25,7 +137,7 @@ mod tests {
             name: format!("Test GPU {}", index),
             temperature: 75,
             utilization: 50,
-            memory_used: 4 * 1024 * 1024 * 1024, // 4GB
+            memory_used: 4 * 1024 * 1024 * 1024,  // 4GB
             memory_total: 8 * 1024 * 1024 * 1024, // 8GB
             power_usage: 150,
             power_limit: 200,
@@ -36,18 +148,9 @@ mod tests {
 
     #[test]
     fn test_app_state_initialization() {
-        let state = AppState {
-            selected_process: 0,
-            selected_gpu_tab: 0,
-            gpu_infos: vec![],
-            error_message: None,
-            power_history: vec![],
-            utilization_history: vec![],
-            use_tabbed_graphs: true,
-            use_bar_charts: false,
-            pending_g: false,
-        };
-        
+        let mut state = AppState::default();
+        state.use_tabbed_graphs = true;
+
         assert_eq!(state.selected_process, 0);
         assert_eq!(state.selected_gpu_tab, 0);
         assert!(state.gpu_infos.is_empty());
@@ -60,56 +163,24 @@ mod tests {
 
     #[test]
     fn test_total_processes_empty() {
-        let state = AppState {
-            selected_process: 0,
-            selected_gpu_tab: 0,
-            gpu_infos: vec![],
-            error_message: None,
-            power_history: vec![],
-            utilization_history: vec![],
-            use_tabbed_graphs: false,
-            use_bar_charts: false,
-            pending_g: false,
-        };
-        
+        let state = AppState::default();
         let total_processes: usize = state.gpu_infos.iter().map(|gpu| gpu.processes.len()).sum();
         assert_eq!(total_processes, 0);
     }
 
     #[test]
     fn test_total_processes_with_gpus() {
-        let state = AppState {
-            selected_process: 0,
-            selected_gpu_tab: 0,
-            gpu_infos: vec![
-                create_test_gpu_info(0),
-                create_test_gpu_info(1),
-            ],
-            error_message: None,
-            power_history: vec![],
-            utilization_history: vec![],
-            use_tabbed_graphs: false,
-            use_bar_charts: false,
-            pending_g: false,
-        };
-        
+        let mut state = AppState::default();
+        state.gpu_infos.push(create_test_gpu_info(0));
+        state.gpu_infos.push(create_test_gpu_info(1));
+
         let total_processes: usize = state.gpu_infos.iter().map(|gpu| gpu.processes.len()).sum();
         assert_eq!(total_processes, 0); // No processes in test GPUs
     }
 
     #[test]
     fn test_can_select_process() {
-        let state = AppState {
-            selected_process: 0,
-            selected_gpu_tab: 0,
-            gpu_infos: vec![],
-            error_message: None,
-            power_history: vec![],
-            utilization_history: vec![],
-            use_tabbed_graphs: false,
-            use_bar_charts: false,
-            pending_g: false,
-        };
+        let state = AppState::default();
         // Should not be able to select any process when there are no GPUs
         let total_processes: usize = state.gpu_infos.iter().map(|gpu| gpu.processes.len()).sum();
         assert!(!(0 < total_processes));
@@ -118,45 +189,26 @@ mod tests {
 
     #[test]
     fn test_can_select_gpu_tab() {
-        let state = AppState {
-            selected_process: 0,
-            selected_gpu_tab: 0,
-            gpu_infos: vec![create_test_gpu_info(0)],
-            error_message: None,
-            power_history: vec![],
-            utilization_history: vec![],
-            use_tabbed_graphs: false,
-            use_bar_charts: false,
-            pending_g: false,
-        };
-        
+        let mut state = AppState::default();
+        state.gpu_infos.push(create_test_gpu_info(0));
+
         // Should be able to select GPU 0, but not GPU 1
-        assert!(0 < state.gpu_infos.len());
+        assert!(!state.gpu_infos.is_empty());
         assert!(1 >= state.gpu_infos.len());
     }
 
     #[test]
     fn test_error_message_handling() {
-        let mut state = AppState {
-            selected_process: 0,
-            selected_gpu_tab: 0,
-            gpu_infos: vec![],
-            error_message: None,
-            power_history: vec![],
-            utilization_history: vec![],
-            use_tabbed_graphs: false,
-            use_bar_charts: false,
-            pending_g: false,
-        };
-        
+        let mut state = AppState::default();
+
         // Initially no error
         assert!(state.error_message.is_none());
-        
+
         // Set an error
         state.error_message = Some("Test error message".to_string());
         assert!(state.error_message.is_some());
         assert_eq!(state.error_message.as_ref().unwrap(), "Test error message");
-        
+
         // Clear the error
         state.error_message = None;
         assert!(state.error_message.is_none());

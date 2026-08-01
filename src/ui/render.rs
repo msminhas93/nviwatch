@@ -1,12 +1,12 @@
 use crate::app_state::AppState;
 use crate::gpu::info::GpuInfo;
 use crate::ui::widgets::{render_footer, render_gpu_graphs};
-use crate::utils::formatting::format_memory_size;
+use crate::utils::format_memory_size;
+use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table};
-use ratatui::Frame;
 
 pub fn ui(f: &mut Frame, app_state: &AppState) {
     let num_gpus = app_state.gpu_infos.len();
@@ -202,7 +202,7 @@ pub fn render_process_list(f: &mut Frame, area: Rect, app_state: &AppState) {
         }
     }
 
-    all_processes.sort_by(|a, b| b.1.used_gpu_memory.cmp(&a.1.used_gpu_memory));
+    all_processes.sort_by_key(|b| std::cmp::Reverse(b.1.used_gpu_memory));
 
     let rows: Vec<Row> = all_processes
         .iter()

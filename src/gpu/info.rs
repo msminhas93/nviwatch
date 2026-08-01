@@ -1,10 +1,18 @@
-use crate::AppState;
-use crate::gpu::process::GpuProcessInfo;
-use crate::utils::system::get_process_info;
-use nvml::Nvml;
-use nvml::enum_wrappers::device::TemperatureSensor;
-use std::error::Error;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
+use crate::Result;
+use crate::app_state::AppState;
+use crate::error::NviError;
+use crate::gpu::GpuProcessInfo;
+use crate::utils::system::get_process_info;
+use influxdb::WriteQuery;
+use nvml::enum_wrappers::device::TemperatureSensor;
+use nvml::{Device, Nvml};
+
+// PERF: we can either optimize this based on the operations we're doing,
+// or we can find a way to use a bitmask,
+// or simply back it
 pub struct GpuInfo {
     pub index: usize,
     pub name: String,
@@ -17,15 +25,15 @@ pub struct GpuInfo {
     pub clock_freq: u32,
     pub processes: Vec<GpuProcessInfo>,
 }
-pub fn collect_gpu_info(
-    nvml: &Nvml,
-    app_state: &mut AppState,
-) -> Result<Vec<GpuInfo>, Box<dyn Error>> {
-    let device_count = nvml.device_count()?;
-    let mut gpu_infos = Vec::new();
 
-    for index in 0..device_count as usize {
-        let device = nvml.device_by_index(index as u32)?;
+impl TryFrom<(usize, Device<'_>)> for GpuInfo {
+    type Error = NviError;
+
+    // TODO: Can probably streamline this a fair bit. Literally just moved the existing code over
+    fn try_from(device_data: (usize, Device<'_>)) -> std::result::Result<Self, Self::Error> {
+        let index = device_data.0;
+        let device = device_data.1;
+
         let name = device.name()?;
         let temperature = device.temperature(TemperatureSensor::Gpu)?;
         let utilization = device.utilization_rates()?.gpu;
@@ -58,41 +66,8 @@ pub fn collect_gpu_info(
                 get_process_info(p.pid, used_gpu_memory)
             })
             .collect();
-        // Update historical data
-        if app_state.power_history.len() <= index {
-            app_state.power_history.push(Vec::new());
-            app_state.utilization_history.push(Vec::new());
-        }
 
-        // Calculate how many seconds have passed since the last update
-        let seconds_passed = if !app_state.power_history[index].is_empty() {
-            (app_state.power_history[index].len() as u64).saturating_sub(60)
-        } else {
-            0
-        };
-
-        // Fill in missing data points with the last known value or 0
-        for _ in 0..seconds_passed {
-            let last_power = app_state.power_history[index].last().copied().unwrap_or(0);
-            let last_util = app_state.utilization_history[index]
-                .last()
-                .copied()
-                .unwrap_or(0);
-            app_state.power_history[index].push(last_power);
-            app_state.utilization_history[index].push(last_util);
-        }
-
-        // Add the current data point
-        app_state.power_history[index].push(power_usage as u64);
-        app_state.utilization_history[index].push(utilization as u64);
-
-        // Keep only the last 60 data points (for a 1-minute graph)
-        while app_state.power_history[index].len() > 60 {
-            app_state.power_history[index].remove(0);
-            app_state.utilization_history[index].remove(0);
-        }
-
-        gpu_infos.push(GpuInfo {
+        Ok(GpuInfo {
             index,
             name,
             temperature,
@@ -103,7 +78,61 @@ pub fn collect_gpu_info(
             power_limit,
             clock_freq,
             processes: [compute_processes, graphics_processes].concat(),
-        });
+        })
+    }
+}
+
+impl From<&GpuInfo> for WriteQuery {
+    fn from(gpu: &GpuInfo) -> Self {
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_else(|_| std::time::Duration::from_secs(0))
+            .as_nanos();
+
+        // TODO: But can we optimize this? (for perf or just... make it simpler?)
+        WriteQuery::new(influxdb::Timestamp::Nanoseconds(ts), "gpu_metrics")
+            .add_tag("gpu_index", gpu.index.to_string())
+            .add_tag("gpu_name", gpu.name.clone())
+            .add_field("temperature", gpu.temperature as f64)
+            .add_field("utilization", gpu.utilization as f64)
+            .add_field("memory_used", gpu.memory_used as i64)
+            .add_field("memory_total", gpu.memory_total as i64)
+            .add_field("power_usage", gpu.power_usage as f64)
+            .add_field("power_limit", gpu.power_limit as f64)
+            .add_field("clock_freq", gpu.clock_freq as f64)
+    }
+}
+
+const HISTORY_CAP: usize = 60;
+
+// Called from AppState::update on each poll interval (not every UI frame).
+pub fn collect_gpu_info(nvml: &Nvml, app_state: &mut AppState) -> Result<Vec<GpuInfo>> {
+    let device_count = nvml.device_count()?;
+    let mut gpu_infos = Vec::new();
+
+    for index in 0..device_count as usize {
+        let device = nvml.device_by_index(index as u32)?;
+
+        let gpu_info = GpuInfo::try_from((index, device))?;
+
+        // Update historical data
+        if app_state.power_history.len() <= index {
+            app_state.power_history.push(Vec::new());
+            app_state.utilization_history.push(Vec::new());
+        }
+
+        // Add the current data point
+        app_state.power_history[index].push(gpu_info.power_usage as u64);
+        app_state.utilization_history[index].push(gpu_info.utilization as u64);
+
+        // Keep only the last 60 data points (for a 1-minute graph at ~1s intervals)
+        if app_state.power_history[index].len() > 60 {
+            let excess = app_state.power_history[index].len() - 60;
+            app_state.power_history[index].drain(..excess);
+            app_state.utilization_history[index].drain(..excess);
+        }
+
+        gpu_infos.push(gpu_info);
     }
 
     Ok(gpu_infos)
