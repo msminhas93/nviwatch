@@ -30,7 +30,7 @@ pub(crate) type Result<T> = core::result::Result<T, NviError>;
 
 fn main() -> Result<()> {
     let matches = Command::new("nviwatch")
-        .version("0.1.0")
+        .version(env!("CARGO_PKG_VERSION"))
         .author("Manpreet Singh")
         .about("NviWatch: A blazingly fast rust based TUI for managing and monitoring NVIDIA GPU processes")
         .arg(
