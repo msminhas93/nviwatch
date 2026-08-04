@@ -125,10 +125,27 @@ impl AppState {
     ) -> Result<()> {
         self.gpu_infos = collect_gpu_info(nvml, self)?;
 
+        // Keep selection in range after processes come and go.
+        let total = self.total_process_count();
+        if total == 0 {
+            self.selected_process = 0;
+        } else if self.selected_process >= total {
+            self.selected_process = total - 1;
+        }
+
         let temp = TempInfluxConfig::try_from(matches)?;
-        let Ok(config) = InfluxDBConfig::try_from(&temp) else {
-            // No / incomplete influx flags: GPU poll still succeeded.
+        // Incomplete flags: skip Influx (same as pre-AppState guard). All four
+        // present but invalid (e.g. empty) must still surface in the UI.
+        if !temp.flags_complete() {
             return Ok(());
+        }
+
+        let config = match InfluxDBConfig::try_from(&temp) {
+            Ok(config) => config,
+            Err(e) => {
+                self.error_message = Some(e.to_string());
+                return Ok(());
+            }
         };
 
         let influx_client =

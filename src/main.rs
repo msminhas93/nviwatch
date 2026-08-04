@@ -258,24 +258,13 @@ fn main() -> Result<()> {
                 KeyCode::Char('x') => {
                     // Single-key kill (primary); same target as dd.
                     app_state.pending_op = PendingOp::None;
-                    if let Some((_gpu, process)) = app_state.selected_process_entry() {
-                        if let Err(e) = kill_selected_process(process.pid, &process.command) {
-                            app_state.error_message = Some(e.to_string());
-                        }
-                    }
+                    kill_highlighted_process(&mut app_state);
                 }
                 KeyCode::Char('d') => {
                     // dd - kill selected process (first d arms pending)
                     if app_state.pending_op == PendingOp::Kill {
                         app_state.pending_op = PendingOp::None;
-                        // Must match UI display order (GPU mem sort), not raw GPU walk.
-                        if let Some((_gpu, process)) = app_state.selected_process_entry() {
-                            if let Err(e) =
-                                kill_selected_process(process.pid, &process.command)
-                            {
-                                app_state.error_message = Some(e.to_string());
-                            }
-                        }
+                        kill_highlighted_process(&mut app_state);
                     } else {
                         app_state.pending_op = PendingOp::Kill;
                     }
@@ -300,4 +289,19 @@ fn main() -> Result<()> {
     terminal.show_cursor()?;
 
     Ok(())
+}
+
+/// Kill the process under the current selection (display order). Surfaces a UI
+/// error when the selection is stale (e.g. the process exited between frames).
+fn kill_highlighted_process(app_state: &mut AppState) {
+    match app_state.selected_process_entry() {
+        Some((_gpu, process)) => {
+            if let Err(e) = kill_selected_process(process.pid, &process.command) {
+                app_state.error_message = Some(e.to_string());
+            }
+        }
+        None => {
+            app_state.error_message = Some("Selected process not found".to_string());
+        }
+    }
 }

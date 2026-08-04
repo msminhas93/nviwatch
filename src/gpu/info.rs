@@ -115,7 +115,9 @@ const HISTORY_CAP: usize = 60;
 pub fn collect_gpu_info(nvml: &Nvml, app_state: &mut AppState) -> Result<Vec<GpuInfo>> {
     let device_count = nvml.device_count()? as usize;
     let mut gpu_infos = Vec::new();
-    let previous_samples = std::mem::take(&mut app_state.cpu_samples);
+    // Borrow prior samples by clone so a mid-poll NVML failure does not wipe
+    // baselines (which would force CPU% back to "—" until the next successful window).
+    let previous_samples = app_state.cpu_samples.clone();
     let mut next_samples = HashMap::new();
 
     for index in 0..device_count {

@@ -8,6 +8,16 @@ pub struct TempInfluxConfig {
     token: Option<String>,
 }
 
+impl TempInfluxConfig {
+    /// True when all four `--influx-*` flags were provided (values may still be empty).
+    pub fn flags_complete(&self) -> bool {
+        self.url.is_some()
+            && self.org.is_some()
+            && self.bucket.is_some()
+            && self.token.is_some()
+    }
+}
+
 impl TryFrom<&clap::ArgMatches> for TempInfluxConfig {
     type Error = NviError;
 
