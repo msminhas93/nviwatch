@@ -20,7 +20,6 @@
     - [1. Default Mode](#1-default-mode)
     - [2. Bar Mode](#2-bar-mode)
     - [3. Tabbed Mode: GPU graphs in tabs for multi GPU nodes](#3-tabbed-mode-gpu-graphs-in-tabs-for-multi-gpu-nodes)
-  - [Star History](#star-history)
   - [License](#license)
   - [Contributing](#contributing)
   - [Acknowledgments](#acknowledgments)
@@ -273,10 +272,6 @@ Displays GPU graphs in a tabbed interface
 ![](assets/tabbed_mode.png)
 
 You can switch between these modes at any time using the corresponding key bindings.
-
-## Star History
-
-[![Star History Chart](https://api.star-history.com/svg?repos=msminhas93/nviwatch&type=Date)](https://star-history.com/#msminhas93/nviwatch&Date)
 
 ## License
 
