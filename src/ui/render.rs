@@ -9,10 +9,10 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table};
 
 /// Minimum rows for the graphs pane (chart axes/title inside borders).
-const GRAPHS_MIN: u16 = 10;
+const GRAPHS_MIN: u16 = 8;
 /// Borders + header + ≥1 process row + footer line.
-const PROCESS_MIN: u16 = 8;
-const MIN_WIDTH: u16 = 80;
+const PROCESS_MIN: u16 = 6;
+const MIN_WIDTH: u16 = 72;
 
 /// Borders (2) + header (1) + one row per GPU (at least 1 placeholder when empty).
 fn gpu_info_height(num_gpus: usize) -> u16 {
@@ -24,22 +24,53 @@ fn required_height(num_gpus: usize) -> u16 {
 }
 
 fn render_terminal_too_small(f: &mut Frame, area: Rect, required_h: u16) {
-    let message = format!(
-        "Terminal too small\n\
-         Need at least {MIN_WIDTH}×{required_h} (now {}×{})\n\
-         Resize your terminal to continue",
-        area.width, area.height
-    );
+    let need_w = area.width < MIN_WIDTH;
+    let need_h = area.height < required_h;
+    let size_hint = match (need_w, need_h) {
+        (true, true) => format!(
+            "Need at least {MIN_WIDTH} cols × {required_h} rows\n(now {}×{})",
+            area.width, area.height
+        ),
+        (true, false) => format!(
+            "Need at least {MIN_WIDTH} columns (now {})",
+            area.width
+        ),
+        (false, true) => format!(
+            "Need at least {required_h} rows (now {})",
+            area.height
+        ),
+        (false, false) => unreachable!(),
+    };
+    let message = format!("Terminal too small\n{size_hint}\n\nResize to continue");
+
+    // Vertically center a short block so the banner isn't stretched full-screen.
+    let outer = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage(35),
+            Constraint::Length(7),
+            Constraint::Percentage(35),
+        ])
+        .split(area);
+    let inner = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(15),
+            Constraint::Percentage(70),
+            Constraint::Percentage(15),
+        ])
+        .split(outer[1]);
+
     let paragraph = Paragraph::new(message)
         .alignment(Alignment::Center)
         .style(Style::default().fg(Color::Yellow))
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title("nviwatch")
+                .title(" nviwatch ")
                 .border_style(Style::default().fg(Color::Yellow)),
         );
-    f.render_widget(paragraph, area);
+    f.render_widget(paragraph, inner[1]);
 }
 
 pub fn ui(f: &mut Frame, app_state: &AppState) {
