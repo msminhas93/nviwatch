@@ -1,32 +1,36 @@
 mod app_state;
+mod error;
 mod gpu;
-mod influxdb;
+mod influx_local;
+mod keybinds;
 mod ui;
 mod utils;
 
-extern crate nvml_wrapper as nvml;
-
-use crate::gpu::info::collect_gpu_info;
-use crate::influxdb::{send_to_influxdb, InfluxDBConfig};
+use crate::error::NviError;
+use crate::keybinds::{KeybindAggregate, PendingOp};
 use crate::ui::render::ui;
+use crate::ui::widgets::help_max_scroll;
 use crate::utils::system::kill_selected_process;
 use app_state::AppState;
 use clap::{Arg, Command};
-use crossterm::event::{self, Event, KeyCode};
+use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{
-    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
 use nvml::Nvml;
-use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
-use std::error::Error;
+use ratatui::backend::CrosstermBackend;
 use std::io::stdout;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-fn main() -> Result<(), Box<dyn Error>> {
+pub const POLLING_TIMEOUT_MS: u64 = 100;
+
+pub(crate) type Result<T> = core::result::Result<T, NviError>;
+
+fn main() -> Result<()> {
     let matches = Command::new("nviwatch")
-        .version("0.1.0")
+        .version(env!("CARGO_PKG_VERSION"))
         .author("Manpreet Singh")
         .about("NviWatch: A blazingly fast rust based TUI for managing and monitoring NVIDIA GPU processes")
         .arg(
@@ -82,113 +86,200 @@ fn main() -> Result<(), Box<dyn Error>> {
         )
         .get_matches();
 
-    let use_tabbed_graphs = matches.get_flag("tabbed-graphs");
-    let use_bar_charts = matches.get_flag("bar-chart");
-
     let watch_interval = matches
         .get_one::<String>("watch")
         .map(|s| s.parse().expect("Invalid number"))
         .unwrap_or(1000);
 
-    let influx_url = matches.get_one::<String>("influx-url").cloned();
-    let influx_org = matches.get_one::<String>("influx-org").cloned();
-    let influx_bucket = matches.get_one::<String>("influx-bucket").cloned();
-    let influx_token = matches.get_one::<String>("influx-token").cloned();
-
     let nvml = Nvml::init()?;
+
+    // Create the runtime before raw/alternate screen so a failure never wedges the terminal.
+    let runtime = tokio::runtime::Runtime::new()?;
 
     let mut stdout = stdout();
     execute!(stdout, EnterAlternateScreen)?;
     enable_raw_mode()?;
 
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = disable_raw_mode();
+        let _ = execute!(std::io::stdout(), LeaveAlternateScreen);
+        default_hook(info);
+    }));
+
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let mut last_update = Instant::now();
-
-    let mut app_state = AppState {
-        selected_process: 0,
-        selected_gpu_tab: 0,
-        gpu_infos: Vec::new(),
-        error_message: None,
-        power_history: Vec::new(),
-        utilization_history: Vec::new(),
-        use_tabbed_graphs,
-        use_bar_charts,
-    };
+    let mut app_state = AppState::from(&matches);
 
     loop {
-        if last_update.elapsed() >= Duration::from_millis(watch_interval) {
-            last_update = Instant::now();
-            app_state.gpu_infos = collect_gpu_info(&nvml, &mut app_state)?;
-
-            if let (Some(url), Some(org), Some(bucket), Some(token)) =
-                (influx_url.as_ref(), influx_org.as_ref(), influx_bucket.as_ref(), influx_token.as_ref())
-            {
-                let influx_config = InfluxDBConfig {
-                    url: url.clone(),
-                    org: org.clone(),
-                    bucket: bucket.clone(),
-                    token: token.clone(),
-                };
-                if let Err(e) = send_to_influxdb(&influx_config, &app_state.gpu_infos) {
-                    app_state.error_message = Some(format!("InfluxDB Error: {}", e));
-                }
-            }
+        if app_state.should_update(watch_interval) {
+            app_state.update(&nvml, &matches, &runtime)?;
         }
 
         terminal.draw(|f| ui(f, &app_state))?;
 
-        if event::poll(Duration::from_millis(100))? {
-            if let Event::Key(key) = event::read()? {
+        // Most of the key event handling probably better off being moved to an actual event key handler
+        // and we just ask it to 'start' at the start of program & handle it
+        // via messages etc.
+
+        if event::poll(Duration::from_millis(POLLING_TIMEOUT_MS))?
+            && let Event::Key(key) = event::read()?
+        {
+            let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+
+            if app_state.show_help {
+                // Clamp using last drawn size approximation: terminal size from crossterm
+                // isn't fetched here; help_max_scroll uses a Rect we rebuild from poll size.
+                let size = terminal.size()?;
+                let help_area = ratatui::layout::Rect {
+                    x: 0,
+                    y: 0,
+                    width: size.width,
+                    height: size.height,
+                };
+                let max_scroll = help_max_scroll(help_area);
+                let page = help_area.height.saturating_sub(2).max(1);
+
                 match key.code {
+                    KeyCode::Char('?') | KeyCode::Esc => {
+                        app_state.show_help = false;
+                        app_state.help_scroll = 0;
+                    }
                     KeyCode::Char('q') => break,
-                    KeyCode::Up => {
+                    KeyCode::Up | KeyCode::Char('k') => {
+                        app_state.help_scroll = app_state.help_scroll.saturating_sub(1);
+                    }
+                    KeyCode::Down | KeyCode::Char('j') => {
+                        app_state.help_scroll = (app_state.help_scroll + 1).min(max_scroll);
+                    }
+                    KeyCode::Char('p') if ctrl => {
+                        app_state.help_scroll = app_state.help_scroll.saturating_sub(1);
+                    }
+                    KeyCode::Char('n') if ctrl => {
+                        app_state.help_scroll = (app_state.help_scroll + 1).min(max_scroll);
+                    }
+                    KeyCode::PageUp => {
+                        app_state.help_scroll = app_state.help_scroll.saturating_sub(page);
+                    }
+                    KeyCode::PageDown => {
+                        app_state.help_scroll =
+                            (app_state.help_scroll.saturating_add(page)).min(max_scroll);
+                    }
+                    KeyCode::Home | KeyCode::Char('g') if !ctrl => {
+                        // Single g / Home → top of help (gg chord not needed here).
+                        app_state.help_scroll = 0;
+                    }
+                    KeyCode::End | KeyCode::Char('G') => {
+                        app_state.help_scroll = max_scroll;
+                    }
+                    _ => {}
+                }
+                // Keep scroll valid if the window was resized smaller.
+                app_state.help_scroll = app_state.help_scroll.min(max_scroll);
+                continue;
+            }
+
+            // Chord second keys are handled below; anything else clears pending.
+            let is_chord_second = matches!(
+                (app_state.pending_op, key.code, ctrl),
+                (PendingOp::GoTop, KeyCode::Char('g'), false)
+                    | (PendingOp::Kill, KeyCode::Char('d'), false)
+            );
+            if app_state.pending_op.is_pending() && !is_chord_second {
+                // Still allow starting a different chord / dedicated keys below;
+                // clear first so stale pending does not stick across unrelated keys.
+                if !matches!(
+                    (key.code, ctrl),
+                    (KeyCode::Char('g'), false) | (KeyCode::Char('d'), false)
+                ) {
+                    app_state.pending_op = PendingOp::None;
+                }
+            }
+
+            if let Some(nav) = KeybindAggregate::try_from(&key).ok() {
+                app_state.pending_op = PendingOp::None;
+                match nav {
+                    KeybindAggregate::Up => {
                         if app_state.selected_process > 0 {
                             app_state.selected_process -= 1;
                         }
                     }
-                    KeyCode::Down => {
-                        let total_processes: usize = app_state
-                            .gpu_infos
-                            .iter()
-                            .map(|gpu| gpu.processes.len())
-                            .sum();
-                        if total_processes > 0 && app_state.selected_process < total_processes - 1 {
+                    KeybindAggregate::Down => {
+                        let total = app_state.total_process_count();
+                        if total > 0 && app_state.selected_process < total - 1 {
                             app_state.selected_process += 1;
                         }
                     }
-                    KeyCode::Left => {
+                    KeybindAggregate::Left => {
                         if app_state.use_tabbed_graphs && app_state.selected_gpu_tab > 0 {
                             app_state.selected_gpu_tab -= 1;
                         }
                     }
-                    KeyCode::Right => {
+                    KeybindAggregate::Right => {
                         if app_state.use_tabbed_graphs
                             && app_state.selected_gpu_tab < app_state.gpu_infos.len() - 1
                         {
                             app_state.selected_gpu_tab += 1;
                         }
                     }
-                    KeyCode::Char('x') => {
-                        if let Err(e) = kill_selected_process(&app_state) {
-                            app_state.error_message = Some(e.to_string());
-                        }
-                    }
-                    KeyCode::Char('d') => {
-                        app_state.use_tabbed_graphs = false;
-                        app_state.use_bar_charts = false;
-                    }
-                    KeyCode::Char('t') => {
-                        app_state.use_tabbed_graphs = true;
-                        app_state.use_bar_charts = false;
-                    }
-                    KeyCode::Char('b') => {
-                        app_state.use_tabbed_graphs = false;
-                        app_state.use_bar_charts = true;
-                    }
-                    _ => {}
                 }
+                continue;
+            }
+
+            match key.code {
+                KeyCode::Char('q') => break,
+                KeyCode::Char('?') => {
+                    app_state.pending_op = PendingOp::None;
+                    app_state.help_scroll = 0;
+                    app_state.show_help = true;
+                }
+                KeyCode::Char('g') if !ctrl => {
+                    if app_state.pending_op == PendingOp::GoTop {
+                        app_state.selected_process = 0;
+                        app_state.pending_op = PendingOp::None;
+                    } else {
+                        app_state.pending_op = PendingOp::GoTop;
+                    }
+                }
+                KeyCode::Char('G') => {
+                    app_state.pending_op = PendingOp::None;
+                    let total = app_state.total_process_count();
+                    if total > 0 {
+                        app_state.selected_process = total - 1;
+                    }
+                }
+                KeyCode::Char('d') if ctrl => {
+                    // Ctrl+d - default mode
+                    app_state.pending_op = PendingOp::None;
+                    app_state.use_tabbed_graphs = false;
+                    app_state.use_bar_charts = false;
+                }
+                KeyCode::Char('x') => {
+                    // Single-key kill (primary); same target as dd.
+                    app_state.pending_op = PendingOp::None;
+                    kill_highlighted_process(&mut app_state);
+                }
+                KeyCode::Char('d') => {
+                    // dd - kill selected process (first d arms pending)
+                    if app_state.pending_op == PendingOp::Kill {
+                        app_state.pending_op = PendingOp::None;
+                        kill_highlighted_process(&mut app_state);
+                    } else {
+                        app_state.pending_op = PendingOp::Kill;
+                    }
+                }
+                KeyCode::Char('t') => {
+                    app_state.pending_op = PendingOp::None;
+                    app_state.use_tabbed_graphs = true;
+                    app_state.use_bar_charts = false;
+                }
+                KeyCode::Char('b') => {
+                    app_state.pending_op = PendingOp::None;
+                    app_state.use_tabbed_graphs = false;
+                    app_state.use_bar_charts = true;
+                }
+                _ => {}
             }
         }
     }
@@ -198,4 +289,19 @@ fn main() -> Result<(), Box<dyn Error>> {
     terminal.show_cursor()?;
 
     Ok(())
+}
+
+/// Kill the process under the current selection (display order). Surfaces a UI
+/// error when the selection is stale (e.g. the process exited between frames).
+fn kill_highlighted_process(app_state: &mut AppState) {
+    match app_state.selected_process_entry() {
+        Some((_gpu, process)) => {
+            if let Err(e) = kill_selected_process(process.pid, &process.command) {
+                app_state.error_message = Some(e.to_string());
+            }
+        }
+        None => {
+            app_state.error_message = Some("Selected process not found".to_string());
+        }
+    }
 }

@@ -1,7 +1,7 @@
 [package]
 name = "nviwatch"
-version = "0.2.1"
-edition = "2021"
+version = "0.2.2"
+edition = "2024"
 description = "A blazingly fast Rust-based TUI for managing and monitoring NVIDIA GPU processes"
 license = "GPL-3.0"
 authors = ["Manpreet Singh Minhas <msminhas@uwaterloo.ca>"]
@@ -13,12 +13,11 @@ keywords = ["nvidia", "gpu", "monitoring", "tui", "system-monitor"]
 categories = ["command-line-utilities", "visualization", "hardware-support"]
 
 
-
 [dependencies]
 clap = "4.5.45"
 crossterm = "0.29.0"
 nix = { version = "0.30.1", features = ["process", "signal", "user"] }
-nvml-wrapper = "0.11.0"
+nvml = { version = "0.11.0", package = "nvml-wrapper" }
 prettytable-rs = "0.10.0"
 procfs = "0.17.0"
 ratatui = "0.29.0"

@@ -1,31 +1,107 @@
 use crate::app_state::AppState;
 use crate::gpu::info::GpuInfo;
-use crate::ui::widgets::{render_footer, render_gpu_graphs};
-use crate::utils::formatting::format_memory_size;
+use crate::ui::widgets::{render_footer, render_gpu_graphs, render_help};
+use crate::utils::format_memory_size;
+use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::layout::{Constraint, Direction, Layout};
+use ratatui::layout::{Alignment, Constraint, Direction, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table};
-use ratatui::Frame;
+
+/// Minimum rows for the graphs pane (chart axes/title inside borders).
+const GRAPHS_MIN: u16 = 8;
+/// Borders + header + ≥1 process row + footer line.
+const PROCESS_MIN: u16 = 6;
+const MIN_WIDTH: u16 = 72;
+
+/// Borders (2) + header (1) + one row per GPU (at least 1 placeholder when empty).
+fn gpu_info_height(num_gpus: usize) -> u16 {
+    3 + num_gpus.max(1) as u16
+}
+
+fn required_height(num_gpus: usize) -> u16 {
+    gpu_info_height(num_gpus) + GRAPHS_MIN + PROCESS_MIN
+}
+
+fn render_terminal_too_small(f: &mut Frame, area: Rect, required_h: u16) {
+    let need_w = area.width < MIN_WIDTH;
+    let need_h = area.height < required_h;
+    let size_hint = match (need_w, need_h) {
+        (true, true) => format!(
+            "Need at least {MIN_WIDTH} cols × {required_h} rows\n(now {}×{})",
+            area.width, area.height
+        ),
+        (true, false) => format!(
+            "Need at least {MIN_WIDTH} columns (now {})",
+            area.width
+        ),
+        (false, true) => format!(
+            "Need at least {required_h} rows (now {})",
+            area.height
+        ),
+        (false, false) => unreachable!(),
+    };
+    let message = format!("Terminal too small\n{size_hint}\n\nResize to continue");
+
+    // Vertically center a short block so the banner isn't stretched full-screen.
+    let outer = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage(35),
+            Constraint::Length(7),
+            Constraint::Percentage(35),
+        ])
+        .split(area);
+    let inner = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(15),
+            Constraint::Percentage(70),
+            Constraint::Percentage(15),
+        ])
+        .split(outer[1]);
+
+    let paragraph = Paragraph::new(message)
+        .alignment(Alignment::Center)
+        .style(Style::default().fg(Color::Yellow))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" nviwatch ")
+                .border_style(Style::default().fg(Color::Yellow)),
+        );
+    f.render_widget(paragraph, inner[1]);
+}
 
 pub fn ui(f: &mut Frame, app_state: &AppState) {
+    let area = f.area();
     let num_gpus = app_state.gpu_infos.len();
-    let gpu_info_percentage = {
-        let base_percentage = num_gpus as u16 * 5;
-        base_percentage.clamp(10, 20)
-    };
+    let gpu_info_h = gpu_info_height(num_gpus);
+    let required_h = required_height(num_gpus);
+
+    if app_state.show_help {
+        // Help is usable even in a short terminal — scroll within the pane.
+        // Skip the main-dashboard minimum-size gate for this overlay.
+        render_help(f, area, app_state.help_scroll);
+        return;
+    }
+
+    if area.width < MIN_WIDTH || area.height < required_h {
+        render_terminal_too_small(f, area, required_h);
+        return;
+    }
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints(
             [
-                Constraint::Percentage(gpu_info_percentage),
-                Constraint::Percentage(40),
-                Constraint::Min(0),
+                Constraint::Length(gpu_info_h),
+                Constraint::Min(GRAPHS_MIN),
+                Constraint::Min(PROCESS_MIN),
             ]
             .as_ref(),
         )
-        .split(f.area());
+        .split(area);
 
     render_gpu_info(f, chunks[0], &app_state.gpu_infos);
     render_gpu_graphs(f, chunks[1], app_state);
@@ -167,15 +243,6 @@ pub fn render_gpu_info(f: &mut Frame, area: Rect, gpu_infos: &[GpuInfo]) {
                 .add_modifier(Modifier::BOLD),
         ),
     ]))
-    .widths([
-        Constraint::Length(index_width as u16),
-        Constraint::Length(name_width as u16),
-        Constraint::Length(temp_width as u16),
-        Constraint::Length(util_width as u16),
-        Constraint::Length(memory_width as u16),
-        Constraint::Length(power_width as u16),
-        Constraint::Length(clock_width as u16),
-    ])
     .column_spacing(1);
 
     f.render_widget(table, gpu_area);
@@ -195,80 +262,92 @@ pub fn render_process_list(f: &mut Frame, area: Rect, app_state: &AppState) {
     f.render_widget(block.clone(), main_area);
     let process_area = block.inner(main_area);
 
-    let mut all_processes = Vec::new();
-    for (gpu_index, gpu_info) in app_state.gpu_infos.iter().enumerate() {
-        for process in &gpu_info.processes {
-            all_processes.push((gpu_index, process));
-        }
-    }
+    // Content widths — headers and values share left edges (left-aligned).
+    // Breathing room comes from column_spacing, not `|` rules.
+    const W_GPU: usize = 3;
+    const W_PID: usize = 7;
+    const W_GMEM: usize = 8;
+    const W_CPU: usize = 6;
+    const W_MEM: usize = 7;
+    const W_USER: usize = 8;
+    const COL_GAP: u16 = 2;
 
-    all_processes.sort_by(|a, b| b.1.used_gpu_memory.cmp(&a.1.used_gpu_memory));
+    let all_processes = app_state.processes_display_order();
+
+    let selected_style = if app_state.pending_op.is_pending() {
+        Style::default()
+            .bg(Color::Yellow)
+            .fg(Color::Black)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+            .bg(Color::DarkGray)
+            .fg(Color::White)
+            .add_modifier(Modifier::BOLD)
+    };
 
     let rows: Vec<Row> = all_processes
         .iter()
         .enumerate()
         .map(|(index, (gpu_index, process))| {
-            let style = if index == app_state.selected_process {
-                Style::default().bg(Color::DarkGray)
-            } else {
-                Style::default()
+            let cpu_pct = match process.cpu_percent {
+                Some(pct) => format!("{pct:.1}%"),
+                None => "—".to_string(),
             };
+            let cells = [
+                fit(&gpu_index.to_string(), W_GPU),
+                fit(&process.pid.to_string(), W_PID),
+                fit(&format_memory_size(process.used_gpu_memory), W_GMEM),
+                fit(&cpu_pct, W_CPU),
+                fit(&format_memory_size(process.memory_usage), W_MEM),
+                fit(&process.username, W_USER),
+                process.command.clone(),
+            ];
 
-            Row::new(vec![
-                Cell::from(gpu_index.to_string()).style(style.fg(Color::Cyan)),
-                Cell::from(process.pid.to_string()).style(style.fg(Color::Yellow)),
-                Cell::from(format_memory_size(process.used_gpu_memory))
-                    .style(style.fg(Color::Green)),
-                Cell::from(format!("{:.1}%", process.cpu_usage)).style(style.fg(Color::Magenta)),
-                Cell::from(format_memory_size(process.memory_usage)).style(style.fg(Color::Blue)),
-                Cell::from(process.username.as_str()).style(style.fg(Color::Red)),
-                Cell::from(process.command.as_str()).style(style),
-            ])
+            if index == app_state.selected_process {
+                Row::new(cells.into_iter().map(|text| Cell::from(text).style(selected_style)))
+                    .style(selected_style)
+            } else {
+                let [gpu, pid, gpu_mem, cpu_pct, mem, user, cmd] = cells;
+                Row::new(vec![
+                    Cell::from(gpu).style(Style::default().fg(Color::Cyan)),
+                    Cell::from(pid).style(Style::default().fg(Color::Yellow)),
+                    Cell::from(gpu_mem).style(Style::default().fg(Color::Green)),
+                    Cell::from(cpu_pct).style(Style::default().fg(Color::LightMagenta)),
+                    Cell::from(mem).style(Style::default().fg(Color::Blue)),
+                    Cell::from(user).style(Style::default().fg(Color::Red)),
+                    Cell::from(cmd),
+                ])
+            }
         })
         .collect();
 
+    let header_style = |fg: Color| Style::default().fg(fg).add_modifier(Modifier::BOLD);
     let table = Table::new(
         rows,
-        &[
-            Constraint::Length(3),
-            Constraint::Length(7),
-            Constraint::Length(8),
-            Constraint::Length(6),
-            Constraint::Length(8),
-            Constraint::Length(15),
-            Constraint::Percentage(100),
+        [
+            Constraint::Length(W_GPU as u16),
+            Constraint::Length(W_PID as u16),
+            Constraint::Length(W_GMEM as u16),
+            Constraint::Length(W_CPU as u16),
+            Constraint::Length(W_MEM as u16),
+            Constraint::Length(W_USER as u16),
+            Constraint::Min(10),
         ],
     )
-    .header(Row::new(vec![
-        Cell::from("GPU").style(
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Cell::from("PID").style(
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Cell::from("GPU Mem").style(
-            Style::default()
-                .fg(Color::Green)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Cell::from("CPU").style(
-            Style::default()
-                .fg(Color::Magenta)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Cell::from("Mem").style(
-            Style::default()
-                .fg(Color::Blue)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Cell::from("User").style(Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
-        Cell::from("Command").style(Style::default().add_modifier(Modifier::BOLD)),
-    ]))
-    .column_spacing(1);
+    .header(
+        Row::new(vec![
+            Cell::from(fit("GPU", W_GPU)).style(header_style(Color::Cyan)),
+            Cell::from(fit("PID", W_PID)).style(header_style(Color::Yellow)),
+            Cell::from(fit("GPU-Mem", W_GMEM)).style(header_style(Color::Green)),
+            Cell::from(fit("CPU%", W_CPU)).style(header_style(Color::LightMagenta)),
+            Cell::from(fit("Mem", W_MEM)).style(header_style(Color::Blue)),
+            Cell::from(fit("User", W_USER)).style(header_style(Color::Red)),
+            Cell::from("Command").style(Style::default().add_modifier(Modifier::BOLD)),
+        ])
+        .bottom_margin(0),
+    )
+    .column_spacing(COL_GAP);
 
     if let Some(error_msg) = &app_state.error_message {
         let error_text = textwrap::wrap(error_msg, process_area.width as usize - 2);
@@ -285,6 +364,11 @@ pub fn render_process_list(f: &mut Frame, area: Rect, app_state: &AppState) {
     }
 
     f.render_widget(table, process_area);
-    // Render the footer
     render_footer(f, footer_area, app_state);
+}
+
+/// Left-align header/value in a fixed width so columns share a consistent left edge.
+fn fit(text: &str, width: usize) -> String {
+    let truncated: String = text.chars().take(width).collect();
+    format!("{truncated:<width$}", width = width)
 }
