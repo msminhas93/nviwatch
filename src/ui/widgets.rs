@@ -80,17 +80,149 @@ pub fn render_tabbed_gpu_graphs(f: &mut Frame, area: Rect, app_state: &AppState)
 
 pub fn render_footer(f: &mut Frame, area: Rect, app_state: &AppState) {
     let footer_text = if app_state.use_tabbed_graphs {
-        "↑↓: nav processes | ←→: switch GPU tabs | x: kill process | d: default mode | b: bar mode | q: quit"
+        "↑↓: nav | ←→: tabs | x: kill | ^d/t/b: modes | ?: help | q: quit"
     } else if app_state.use_bar_charts {
-        "↑↓: nav processes | x: kill process | d: default mode | t: tabbed mode | q: quit"
+        "↑↓: nav | x: kill | ^d/t/b: modes | ?: help | q: quit"
     } else {
-        "↑↓: nav processes | x: kill process | b: bar mode | t: tabbed mode | q: quit"
+        "↑↓: nav | x: kill | ^d/t/b: modes | ?: help | q: quit"
     };
 
     let footer = Paragraph::new(footer_text)
         .style(Style::default().fg(Color::Gray))
         .alignment(Alignment::Center);
     f.render_widget(footer, area);
+}
+
+/// Full keymap. Action first; keys for the same action share one row with `·`.
+///
+/// Content can exceed the terminal height — callers pass a vertical scroll
+/// offset and we clamp it so ↑↓ / j k / PgUp/PgDn can reveal the rest.
+pub fn render_help(f: &mut Frame, area: Rect, scroll: u16) {
+    let lines = help_lines();
+    let content_h = lines.len() as u16;
+    // Borders take 2 rows; remaining is the viewport for scrolled text.
+    let viewport = area.height.saturating_sub(2);
+    let max_scroll = content_h.saturating_sub(viewport);
+    let scroll = scroll.min(max_scroll);
+
+    let title = if max_scroll > 0 {
+        format!(" Help  ·  ↑↓ scroll ({}/{})  ·  Esc/? close ", scroll, max_scroll)
+    } else {
+        " Help  ·  Esc/? close ".to_string()
+    };
+
+    let paragraph = Paragraph::new(lines)
+        .alignment(Alignment::Left)
+        .scroll((scroll, 0))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(title)
+                .border_style(Style::default().fg(Color::Cyan)),
+        );
+    f.render_widget(paragraph, area);
+}
+
+/// Max scroll offset for the current help content in `area`.
+pub fn help_max_scroll(area: Rect) -> u16 {
+    let content_h = help_lines().len() as u16;
+    let viewport = area.height.saturating_sub(2);
+    content_h.saturating_sub(viewport)
+}
+
+fn help_lines() -> Vec<Line<'static>> {
+    let title = Style::default()
+        .fg(Color::Cyan)
+        .add_modifier(Modifier::BOLD);
+    let action = Style::default()
+        .fg(Color::White)
+        .add_modifier(Modifier::BOLD);
+    let key = Style::default().fg(Color::Yellow);
+    let note = Style::default().fg(Color::DarkGray);
+    let sep = Style::default().fg(Color::DarkGray);
+
+    vec![
+        Line::from(Span::styled("Navigation", title)),
+        Line::from(""),
+        Line::from(Span::styled("  Move process selection", action)),
+        Line::from(vec![
+            Span::raw("    "),
+            Span::styled("↑ ↓", key),
+            Span::styled("  ·  ", sep),
+            Span::styled("j k", key),
+            Span::styled("  vim", note),
+            Span::styled("  ·  ", sep),
+            Span::styled("Ctrl+p  Ctrl+n", key),
+            Span::styled("  emacs", note),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled(
+            "  Switch GPU tabs  (tabbed mode only)",
+            action,
+        )),
+        Line::from(vec![
+            Span::raw("    "),
+            Span::styled("← →", key),
+            Span::styled("  ·  ", sep),
+            Span::styled("h l", key),
+            Span::styled("  vim", note),
+            Span::styled("  ·  ", sep),
+            Span::styled("Ctrl+b  Ctrl+f", key),
+            Span::styled("  emacs", note),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled("  Jump to first / last process", action)),
+        Line::from(vec![
+            Span::raw("    "),
+            Span::styled("g g", key),
+            Span::styled("  top", note),
+            Span::styled("  ·  ", sep),
+            Span::styled("G", key),
+            Span::styled("  bottom", note),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled("Actions", title)),
+        Line::from(""),
+        Line::from(Span::styled("  Kill selected process", action)),
+        Line::from(vec![
+            Span::raw("    "),
+            Span::styled("x", key),
+            Span::styled("  ·  ", sep),
+            Span::styled("d d", key),
+            Span::styled("  vim chord (press d twice)", note),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled("  Graph mode", action)),
+        Line::from(vec![
+            Span::raw("    "),
+            Span::styled("Ctrl+d", key),
+            Span::styled("  default", note),
+            Span::styled("  ·  ", sep),
+            Span::styled("t", key),
+            Span::styled("  tabbed", note),
+            Span::styled("  ·  ", sep),
+            Span::styled("b", key),
+            Span::styled("  bars", note),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled("  This screen / quit", action)),
+        Line::from(vec![
+            Span::raw("    "),
+            Span::styled("?", key),
+            Span::styled("  toggle help", note),
+            Span::styled("  ·  ", sep),
+            Span::styled("Esc", key),
+            Span::styled("  close", note),
+            Span::styled("  ·  ", sep),
+            Span::styled("q", key),
+            Span::styled("  quit", note),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled(
+            "  Tip: footer lists primary keys only; aliases live here.",
+            note,
+        )),
+    ]
 }
 
 pub fn render_all_gpu_graphs(f: &mut Frame, area: Rect, app_state: &AppState) {

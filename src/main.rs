@@ -2,12 +2,14 @@ mod app_state;
 mod error;
 mod gpu;
 mod influx_local;
+mod keybinds;
 mod ui;
 mod utils;
 
 use crate::error::NviError;
-use crate::gpu::GpuProcessInfo;
+use crate::keybinds::{KeybindAggregate, PendingOp};
 use crate::ui::render::ui;
+use crate::ui::widgets::help_max_scroll;
 use crate::utils::system::kill_selected_process;
 use app_state::AppState;
 use clap::{Arg, Command};
@@ -124,92 +126,167 @@ fn main() -> Result<()> {
         if event::poll(Duration::from_millis(POLLING_TIMEOUT_MS))?
             && let Event::Key(key) = event::read()?
         {
-            // Reset gg pending state on any non-g keypress
-            if !matches!(key.code, KeyCode::Char('g')) {
-                app_state.pending_g = false;
+            let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+
+            if app_state.show_help {
+                // Clamp using last drawn size approximation: terminal size from crossterm
+                // isn't fetched here; help_max_scroll uses a Rect we rebuild from poll size.
+                let size = terminal.size()?;
+                let help_area = ratatui::layout::Rect {
+                    x: 0,
+                    y: 0,
+                    width: size.width,
+                    height: size.height,
+                };
+                let max_scroll = help_max_scroll(help_area);
+                let page = help_area.height.saturating_sub(2).max(1);
+
+                match key.code {
+                    KeyCode::Char('?') | KeyCode::Esc => {
+                        app_state.show_help = false;
+                        app_state.help_scroll = 0;
+                    }
+                    KeyCode::Char('q') => break,
+                    KeyCode::Up | KeyCode::Char('k') => {
+                        app_state.help_scroll = app_state.help_scroll.saturating_sub(1);
+                    }
+                    KeyCode::Down | KeyCode::Char('j') => {
+                        app_state.help_scroll = (app_state.help_scroll + 1).min(max_scroll);
+                    }
+                    KeyCode::Char('p') if ctrl => {
+                        app_state.help_scroll = app_state.help_scroll.saturating_sub(1);
+                    }
+                    KeyCode::Char('n') if ctrl => {
+                        app_state.help_scroll = (app_state.help_scroll + 1).min(max_scroll);
+                    }
+                    KeyCode::PageUp => {
+                        app_state.help_scroll = app_state.help_scroll.saturating_sub(page);
+                    }
+                    KeyCode::PageDown => {
+                        app_state.help_scroll =
+                            (app_state.help_scroll.saturating_add(page)).min(max_scroll);
+                    }
+                    KeyCode::Home | KeyCode::Char('g') if !ctrl => {
+                        // Single g / Home → top of help (gg chord not needed here).
+                        app_state.help_scroll = 0;
+                    }
+                    KeyCode::End | KeyCode::Char('G') => {
+                        app_state.help_scroll = max_scroll;
+                    }
+                    _ => {}
+                }
+                // Keep scroll valid if the window was resized smaller.
+                app_state.help_scroll = app_state.help_scroll.min(max_scroll);
+                continue;
+            }
+
+            // Chord second keys are handled below; anything else clears pending.
+            let is_chord_second = matches!(
+                (app_state.pending_op, key.code, ctrl),
+                (PendingOp::GoTop, KeyCode::Char('g'), false)
+                    | (PendingOp::Kill, KeyCode::Char('d'), false)
+            );
+            if app_state.pending_op.is_pending() && !is_chord_second {
+                // Still allow starting a different chord / dedicated keys below;
+                // clear first so stale pending does not stick across unrelated keys.
+                if !matches!(
+                    (key.code, ctrl),
+                    (KeyCode::Char('g'), false) | (KeyCode::Char('d'), false)
+                ) {
+                    app_state.pending_op = PendingOp::None;
+                }
+            }
+
+            if let Some(nav) = KeybindAggregate::try_from(&key).ok() {
+                app_state.pending_op = PendingOp::None;
+                match nav {
+                    KeybindAggregate::Up => {
+                        if app_state.selected_process > 0 {
+                            app_state.selected_process -= 1;
+                        }
+                    }
+                    KeybindAggregate::Down => {
+                        let total = app_state.total_process_count();
+                        if total > 0 && app_state.selected_process < total - 1 {
+                            app_state.selected_process += 1;
+                        }
+                    }
+                    KeybindAggregate::Left => {
+                        if app_state.use_tabbed_graphs && app_state.selected_gpu_tab > 0 {
+                            app_state.selected_gpu_tab -= 1;
+                        }
+                    }
+                    KeybindAggregate::Right => {
+                        if app_state.use_tabbed_graphs
+                            && app_state.selected_gpu_tab < app_state.gpu_infos.len() - 1
+                        {
+                            app_state.selected_gpu_tab += 1;
+                        }
+                    }
+                }
+                continue;
             }
 
             match key.code {
                 KeyCode::Char('q') => break,
-                KeyCode::Up | KeyCode::Char('k') => {
-                    if app_state.selected_process > 0 {
-                        app_state.selected_process -= 1;
-                    }
+                KeyCode::Char('?') => {
+                    app_state.pending_op = PendingOp::None;
+                    app_state.help_scroll = 0;
+                    app_state.show_help = true;
                 }
-                KeyCode::Down | KeyCode::Char('j') => {
-                    let total_processes: usize = app_state
-                        .gpu_infos
-                        .iter()
-                        .map(|gpu| gpu.processes.len())
-                        .sum();
-                    if total_processes > 0 && app_state.selected_process < total_processes - 1 {
-                        app_state.selected_process += 1;
-                    }
-                }
-                KeyCode::Left | KeyCode::Char('h') => {
-                    if app_state.use_tabbed_graphs && app_state.selected_gpu_tab > 0 {
-                        app_state.selected_gpu_tab -= 1;
-                    }
-                }
-                KeyCode::Right | KeyCode::Char('l') => {
-                    if app_state.use_tabbed_graphs
-                        && app_state.selected_gpu_tab < app_state.gpu_infos.len() - 1
-                    {
-                        app_state.selected_gpu_tab += 1;
-                    }
-                }
-                KeyCode::Char('g') => {
-                    if app_state.pending_g {
-                        // gg - go to top
+                KeyCode::Char('g') if !ctrl => {
+                    if app_state.pending_op == PendingOp::GoTop {
                         app_state.selected_process = 0;
-                        app_state.pending_g = false;
+                        app_state.pending_op = PendingOp::None;
                     } else {
-                        app_state.pending_g = true;
+                        app_state.pending_op = PendingOp::GoTop;
                     }
                 }
                 KeyCode::Char('G') => {
-                    // G - go to bottom
-                    let total_processes: usize = app_state
-                        .gpu_infos
-                        .iter()
-                        .map(|gpu| gpu.processes.len())
-                        .sum();
-                    if total_processes > 0 {
-                        app_state.selected_process = total_processes - 1;
+                    app_state.pending_op = PendingOp::None;
+                    let total = app_state.total_process_count();
+                    if total > 0 {
+                        app_state.selected_process = total - 1;
                     }
                 }
-                KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                KeyCode::Char('d') if ctrl => {
                     // Ctrl+d - default mode
+                    app_state.pending_op = PendingOp::None;
                     app_state.use_tabbed_graphs = false;
                     app_state.use_bar_charts = false;
                 }
+                KeyCode::Char('x') => {
+                    // Single-key kill (primary); same target as dd.
+                    app_state.pending_op = PendingOp::None;
+                    if let Some((_gpu, process)) = app_state.selected_process_entry() {
+                        if let Err(e) = kill_selected_process(process.pid, &process.command) {
+                            app_state.error_message = Some(e.to_string());
+                        }
+                    }
+                }
                 KeyCode::Char('d') => {
-                    // d - kill selected process
-                    let total_processes: usize = app_state
-                        .gpu_infos
-                        .iter()
-                        .map(|gpu| gpu.processes.len())
-                        .sum();
-                    if app_state.selected_process < total_processes {
-                        let all_processes: Vec<&GpuProcessInfo> = app_state
-                            .gpu_infos
-                            .iter()
-                            .flat_map(|gpu| &gpu.processes)
-                            .collect();
-                        if let Some(process) = all_processes.get(app_state.selected_process) {
+                    // dd - kill selected process (first d arms pending)
+                    if app_state.pending_op == PendingOp::Kill {
+                        app_state.pending_op = PendingOp::None;
+                        // Must match UI display order (GPU mem sort), not raw GPU walk.
+                        if let Some((_gpu, process)) = app_state.selected_process_entry() {
                             if let Err(e) =
                                 kill_selected_process(process.pid, &process.command)
                             {
                                 app_state.error_message = Some(e.to_string());
                             }
                         }
+                    } else {
+                        app_state.pending_op = PendingOp::Kill;
                     }
                 }
                 KeyCode::Char('t') => {
+                    app_state.pending_op = PendingOp::None;
                     app_state.use_tabbed_graphs = true;
                     app_state.use_bar_charts = false;
                 }
                 KeyCode::Char('b') => {
+                    app_state.pending_op = PendingOp::None;
                     app_state.use_tabbed_graphs = false;
                     app_state.use_bar_charts = true;
                 }

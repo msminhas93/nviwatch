@@ -1,8 +1,13 @@
 use crate::Result;
 use crate::error::NviError;
+use crate::gpu::GpuProcessInfo;
 use crate::gpu::info::{GpuInfo, collect_gpu_info};
 use crate::influx_local::{InfluxDBConfig, TempInfluxConfig};
+use crate::keybinds::PendingOp;
+use crate::utils::system::CpuSample;
 use nvml::Nvml;
+use std::cmp::Reverse;
+use std::collections::HashMap;
 
 pub struct AppState {
     last_update: std::time::Instant,
@@ -14,7 +19,14 @@ pub struct AppState {
     pub utilization_history: Vec<Vec<u64>>,
     pub use_tabbed_graphs: bool,
     pub use_bar_charts: bool,
-    pub pending_g: bool,
+    /// Multi-key chord in progress (`gg` / `dd`).
+    pub pending_op: PendingOp,
+    /// Full keymap overlay (`?`).
+    pub show_help: bool,
+    /// Vertical scroll offset (lines) while help is open.
+    pub help_scroll: u16,
+    /// Prior CPU tick samples for top-style %CPU deltas (keyed by PID).
+    pub cpu_samples: HashMap<u32, CpuSample>,
 }
 
 impl Default for AppState {
@@ -29,7 +41,10 @@ impl Default for AppState {
             utilization_history: Vec::new(),
             use_tabbed_graphs: false,
             use_bar_charts: false,
-            pending_g: false,
+            pending_op: PendingOp::None,
+            show_help: false,
+            help_scroll: 0,
+            cpu_samples: HashMap::new(),
         }
     }
 }
@@ -49,12 +64,46 @@ impl From<&clap::ArgMatches> for AppState {
             utilization_history: Vec::new(),
             use_tabbed_graphs,
             use_bar_charts,
-            pending_g: false,
+            pending_op: PendingOp::None,
+            show_help: false,
+            help_scroll: 0,
+            cpu_samples: HashMap::new(),
         }
     }
 }
 
 impl AppState {
+    /// Total GPU process rows (all devices). Count only — no sort.
+    pub fn total_process_count(&self) -> usize {
+        self.gpu_infos.iter().map(|g| g.processes.len()).sum()
+    }
+
+    /// Same order as the process table: flatten then GPU-memory desc.
+    ///
+    /// Selection, kill, and render must all go through this (or
+    /// `selected_process_entry`) so the index never points at different rows.
+    pub fn processes_display_order(&self) -> Vec<(usize, &GpuProcessInfo)> {
+        let mut procs: Vec<_> = self
+            .gpu_infos
+            .iter()
+            .enumerate()
+            .flat_map(|(gpu_index, gpu)| {
+                gpu.processes
+                    .iter()
+                    .map(move |process| (gpu_index, process))
+            })
+            .collect();
+        procs.sort_by_key(|(_, p)| Reverse(p.used_gpu_memory));
+        procs
+    }
+
+    /// Process under the current selection, in display order.
+    pub fn selected_process_entry(&self) -> Option<(usize, &GpuProcessInfo)> {
+        self.processes_display_order()
+            .get(self.selected_process)
+            .copied()
+    }
+
     pub fn should_update(&mut self, interval_ms: u64) -> bool {
         if self.last_update.elapsed() < std::time::Duration::from_millis(interval_ms) {
             false
@@ -139,13 +188,13 @@ mod tests {
         assert!(state.utilization_history.is_empty());
         assert!(state.use_tabbed_graphs);
         assert!(!state.use_bar_charts);
+        assert_eq!(state.pending_op, PendingOp::None);
     }
 
     #[test]
     fn test_total_processes_empty() {
         let state = AppState::default();
-        let total_processes: usize = state.gpu_infos.iter().map(|gpu| gpu.processes.len()).sum();
-        assert_eq!(total_processes, 0);
+        assert_eq!(state.total_process_count(), 0);
     }
 
     #[test]
@@ -154,15 +203,14 @@ mod tests {
         state.gpu_infos.push(create_test_gpu_info(0));
         state.gpu_infos.push(create_test_gpu_info(1));
 
-        let total_processes: usize = state.gpu_infos.iter().map(|gpu| gpu.processes.len()).sum();
-        assert_eq!(total_processes, 0); // No processes in test GPUs
+        assert_eq!(state.total_process_count(), 0); // No processes in test GPUs
     }
 
     #[test]
     fn test_can_select_process() {
         let state = AppState::default();
         // Should not be able to select any process when there are no GPUs
-        let total_processes: usize = state.gpu_infos.iter().map(|gpu| gpu.processes.len()).sum();
+        let total_processes = state.total_process_count();
         assert!(!(0 < total_processes));
         assert!(!(1 < total_processes));
     }

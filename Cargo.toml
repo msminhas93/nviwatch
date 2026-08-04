@@ -1,5 +1,3 @@
-cargo-features = [ "codegen-backend", "trim-paths" ]
-
 [package]
 name = "nviwatch"
 version = "0.2.1"
@@ -26,39 +24,3 @@ ratatui = "0.29.0"
 textwrap = "0.16.2"
 influxdb = { version = "0.7.2", features = ["derive"] }
 tokio = { version = "1.47.1", features = ["full"] }
-
-
-# Build profiles (from rust_template)
-[profile.dev]
-opt-level        = 1
-codegen-units    = 256
-incremental      = true
-codegen-backend  = "cranelift"
-debug            = "line-tables-only"
-debug-assertions = true
-overflow-checks  = true
-strip            = "none"
-panic            = "abort"
-lto              = "off"
-trim-paths       = "none"
-
-[profile.release]
-opt-level        = 3
-codegen-units    = 1
-incremental      = false
-codegen-backend  = "cranelift"
-debug            = "none"
-debug-assertions = false
-overflow-checks  = false
-strip            = "symbols"
-panic            = "unwind"
-lto              = "off"
-trim-paths       = [ "diagnostics", "object" ]
-
-[profile.dev.package."*"]
-inherits        = "release"
-codegen-backend = "cranelift"
-
-[profile.release.package."*"]
-inherits        = "release"
-codegen-backend = "cranelift"
