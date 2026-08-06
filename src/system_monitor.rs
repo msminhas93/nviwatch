@@ -141,68 +141,7 @@ pub fn collect_system_stats(app_state: &mut AppState) -> Result<(), NviError> {
     let swap_total = mem.swap_total;
     let swap_used = swap_total.saturating_sub(mem.swap_free);
 
-    let gpu_map = build_gpu_map(&app_state.gpu_infos);
-    let page = procfs::page_size();
-    let mut procs: Vec<SystemProcess> = Vec::new();
-    let mut new_prev: HashMap<i32, u64> = HashMap::new();
-
-    if let Ok(iter) = all_processes() {
-        for p in iter.filter_map(|p| p.ok()) {
-            if let Ok(stat) = p.stat() {
-                let pid = stat.pid;
-                let ticks = stat.utime + stat.stime;
-                new_prev.insert(pid, ticks);
-
-                let cpu_usage = if total_delta > 0 {
-                    match app_state.prev_proc_times.get(&pid) {
-                        Some(&prev) => {
-                            (ticks.saturating_sub(prev) as f64 / total_delta as f64
-                                * logical_cores as f64
-                                * 100.0) as f32
-                        }
-                        None => 0.0,
-                    }
-                } else {
-                    0.0
-                };
-
-                let (gpu_memory, gpu_index) = match gpu_map.get(&pid) {
-                    Some(&(m, i)) => (Some(m), Some(i)),
-                    None => (None, None),
-                };
-
-                procs.push(SystemProcess {
-                    pid,
-                    gpu_memory,
-                    gpu_index,
-                    username: String::new(),
-                    command: stat.comm.clone(),
-                    cpu_usage,
-                    memory_usage: stat.rss * page,
-                    state: stat.state,
-                });
-            }
-        }
-    }
-
-    sort_processes(&mut procs, app_state.sort_mode);
-    procs.truncate(TOP_N);
-
-    for proc in procs.iter_mut() {
-        match Process::new(proc.pid) {
-            Ok(process) => {
-                if let Ok(uid) = process.uid() {
-                    proc.username = username_for(uid, &mut app_state.uid_cache);
-                }
-                match process.cmdline() {
-                    Ok(cmd) if !cmd.join(" ").is_empty() => proc.command = cmd.join(" "),
-                    _ => proc.command = format!("[{}]", proc.command),
-                }
-            }
-            Err(_) => proc.command = format!("[{}]", proc.command),
-        }
-    }
-
+    // Commit CPU / memory panels even if the process scan fails below.
     app_state.cpu_stats = CpuStats {
         model,
         logical_cores,
@@ -215,17 +154,11 @@ pub fn collect_system_stats(app_state: &mut AppState) -> Result<(), NviError> {
         swap_total,
         swap_used,
     };
-    // Skip the bootstrap sample (always 0% — no prior delta) so the history
-    // graph doesn't fill with a flat zero line before real readings exist.
     let had_baseline = app_state.prev_cpu_total.is_some();
-
     app_state.prev_cpu_total = Some(cur_total);
     app_state.prev_cpu_per_core = cur_per_core;
-    app_state.prev_proc_times = new_prev;
-    app_state.processes = procs;
 
     if had_baseline {
-        // Keep sub-percent precision; rounding to u64 made idle ~0.3% look like 0.
         app_state
             .cpu_usage_history
             .push(f64::from(aggregate_usage).clamp(0.0, 100.0));
@@ -234,7 +167,85 @@ pub fn collect_system_stats(app_state: &mut AppState) -> Result<(), NviError> {
         }
     }
 
+    let gpu_map = build_gpu_map(&app_state.gpu_infos);
+    let page = procfs::page_size();
+    let mut procs: Vec<SystemProcess> = Vec::new();
+    let mut new_prev: HashMap<i32, u64> = HashMap::new();
+
+    let iter = all_processes().map_err(|e| {
+        // Keep the previous tray and CPU baselines so a transient /proc failure
+        // does not blank process monitoring or reset %CPU deltas.
+        NviError::General(format!("Process list unavailable: {e}"))
+    })?;
+
+    for p in iter.filter_map(|p| p.ok()) {
+        if let Ok(stat) = p.stat() {
+            let pid = stat.pid;
+            let ticks = stat.utime + stat.stime;
+            new_prev.insert(pid, ticks);
+
+            let cpu_usage = if total_delta > 0 {
+                match app_state.prev_proc_times.get(&pid) {
+                    Some(&prev) => {
+                        (ticks.saturating_sub(prev) as f64 / total_delta as f64
+                            * logical_cores as f64
+                            * 100.0) as f32
+                    }
+                    None => 0.0,
+                }
+            } else {
+                0.0
+            };
+
+            let (gpu_memory, gpu_index) = match gpu_map.get(&pid) {
+                Some(&(m, i)) => (Some(m), Some(i)),
+                None => (None, None),
+            };
+
+            procs.push(SystemProcess {
+                pid,
+                gpu_memory,
+                gpu_index,
+                username: String::new(),
+                command: stat.comm.clone(),
+                cpu_usage,
+                memory_usage: stat.rss * page,
+                state: stat.state,
+            });
+        }
+    }
+
+    app_state.prev_proc_times = new_prev;
+    app_state.process_scan = procs;
+    rebuild_process_tray(app_state);
+
     Ok(())
+}
+
+/// Sort the last full scan by the active mode, keep top N, and enrich for display.
+pub fn rebuild_process_tray(app_state: &mut AppState) {
+    let mut procs = app_state.process_scan.clone();
+    sort_processes(&mut procs, app_state.sort_mode);
+    procs.truncate(TOP_N);
+    enrich_processes(&mut procs, &mut app_state.uid_cache);
+    app_state.processes = procs;
+}
+
+fn enrich_processes(procs: &mut [SystemProcess], uid_cache: &mut HashMap<u32, String>) {
+    for proc in procs.iter_mut() {
+        match Process::new(proc.pid) {
+            Ok(process) => {
+                if let Ok(uid) = process.uid() {
+                    proc.username = username_for(uid, uid_cache);
+                }
+                match process.cmdline() {
+                    Ok(cmd) if !cmd.join(" ").is_empty() => proc.command = cmd.join(" "),
+                    _ => proc.command = format!("[{}]", proc.command),
+                }
+            }
+            Err(_) => proc.command = format!("[{}]", proc.command),
+        }
+    }
 }
 
 /// Build an InfluxDB write for system-wide CPU/memory (used with `--cpu` + Influx).
@@ -513,6 +524,36 @@ mod tests {
         ];
         let map = build_gpu_map(&gpus);
         assert_eq!(map.get(&42), Some(&(600, 1)));
+    }
+
+    #[test]
+    fn test_rebuild_tray_repicks_top_n_after_sort_change() {
+        use crate::app_state::AppState;
+
+        let mut state = AppState::default();
+        // Simulate a full scan larger than what a tiny "top" would keep under CPU sort.
+        let mut scan = Vec::new();
+        for i in 0..10 {
+            scan.push(SystemProcess {
+                pid: i,
+                gpu_memory: if i == 9 { Some(9999) } else { None },
+                gpu_index: if i == 9 { Some(0) } else { None },
+                username: String::new(),
+                command: format!("p{i}"),
+                cpu_usage: (10 - i) as f32, // pid 0 highest CPU
+                memory_usage: 0,
+                state: 'R',
+            });
+        }
+        state.process_scan = scan;
+        state.sort_mode = SortMode::Cpu;
+        rebuild_process_tray(&mut state);
+        assert_eq!(state.processes[0].pid, 0);
+
+        state.sort_mode = SortMode::GpuMemory;
+        rebuild_process_tray(&mut state);
+        assert_eq!(state.processes[0].pid, 9);
+        assert_eq!(state.processes[0].gpu_memory, Some(9999));
     }
 
     #[test]

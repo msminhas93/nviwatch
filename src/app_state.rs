@@ -5,8 +5,8 @@ use crate::gpu::info::{GpuInfo, collect_gpu_info};
 use crate::influx_local::{InfluxDBConfig, TempInfluxConfig};
 use crate::keybinds::PendingOp;
 use crate::system_monitor::{
-    collect_system_stats, sort_processes, system_metrics_write_query, CpuStats, KernelCpuSample,
-    SortMode, SystemProcess,
+    collect_system_stats, rebuild_process_tray, system_metrics_write_query, CpuStats,
+    KernelCpuSample, SortMode, SystemProcess,
 };
 use crate::utils::system::CpuSample;
 use nvml::Nvml;
@@ -38,6 +38,9 @@ pub struct AppState {
     pub cpu_samples: HashMap<u32, CpuSample>,
 
     // ---- CPU / system side (`--cpu`) ----
+    /// Last successful full process scan (pre top-N truncate). Sort toggles
+    /// rebuild the tray from this so the new metric truly re-picks top N.
+    pub process_scan: Vec<SystemProcess>,
     pub processes: Vec<SystemProcess>,
     pub sort_mode: SortMode,
     pub cpu_stats: CpuStats,
@@ -66,6 +69,7 @@ impl Default for AppState {
             show_help: false,
             help_scroll: 0,
             cpu_samples: HashMap::new(),
+            process_scan: Vec::new(),
             processes: Vec::new(),
             sort_mode: SortMode::default(),
             cpu_stats: CpuStats::default(),
@@ -99,6 +103,7 @@ impl From<&clap::ArgMatches> for AppState {
             show_help: false,
             help_scroll: 0,
             cpu_samples: HashMap::new(),
+            process_scan: Vec::new(),
             processes: Vec::new(),
             sort_mode: SortMode::default(),
             cpu_stats: CpuStats::default(),
@@ -160,13 +165,13 @@ impl AppState {
         }
     }
 
-    /// Toggle CPU% ↔ GPU-memory sort for the system tray and re-sort in place.
+    /// Toggle CPU% ↔ GPU-memory sort and rebuild top-N from the last full scan.
     pub fn cycle_sort_mode(&mut self) {
         self.sort_mode = match self.sort_mode {
             SortMode::Cpu => SortMode::GpuMemory,
             SortMode::GpuMemory => SortMode::Cpu,
         };
-        sort_processes(&mut self.processes, self.sort_mode);
+        rebuild_process_tray(self);
         self.selected_process = 0;
     }
 
@@ -399,37 +404,52 @@ mod tests {
     }
 
     #[test]
-    fn test_cycle_sort_mode_resets_selection() {
+    fn test_cycle_sort_mode_rebuilds_top_n_from_full_scan() {
         let mut state = AppState::default();
         state.cpu_monitoring = true;
         state.selected_process = 3;
-        state.processes = vec![
+        // Full scan has a GPU-heavy process that would be truncated away under
+        // CPU-sort top-2, but must surface after toggling to GPU-memory sort.
+        state.process_scan = vec![
             SystemProcess {
                 pid: 1,
                 gpu_memory: None,
                 gpu_index: None,
                 username: String::new(),
-                command: String::new(),
-                cpu_usage: 10.0,
+                command: "cpu-a".into(),
+                cpu_usage: 90.0,
                 memory_usage: 0,
                 state: 'R',
             },
             SystemProcess {
                 pid: 2,
-                gpu_memory: Some(100),
+                gpu_memory: None,
+                gpu_index: None,
+                username: String::new(),
+                command: "cpu-b".into(),
+                cpu_usage: 80.0,
+                memory_usage: 0,
+                state: 'R',
+            },
+            SystemProcess {
+                pid: 3,
+                gpu_memory: Some(8192),
                 gpu_index: Some(0),
                 username: String::new(),
-                command: String::new(),
+                command: "gpu-heavy".into(),
                 cpu_usage: 1.0,
                 memory_usage: 0,
                 state: 'R',
             },
         ];
+        rebuild_process_tray(&mut state);
+        // With TOP_N=50 all three fit; still assert GPU sort promotes pid 3.
         assert_eq!(state.sort_mode, SortMode::Cpu);
+        assert_eq!(state.processes[0].pid, 1);
         state.cycle_sort_mode();
         assert_eq!(state.sort_mode, SortMode::GpuMemory);
         assert_eq!(state.selected_process, 0);
-        assert_eq!(state.processes[0].pid, 2);
+        assert_eq!(state.processes[0].pid, 3);
     }
 
     #[test]
