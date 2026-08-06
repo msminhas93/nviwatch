@@ -191,27 +191,24 @@ Note: Ensure you have the NVIDIA Management Library (NVML) available on your sys
 
 ### Option 3: Install via Conda, Mamba, or Pixi
 
-NviWatch is also available from conda-forge for conda-based environments.
+NviWatch is also available from [conda-forge](https://anaconda.org/conda-forge/nviwatch):
 
-1. With Conda:
+1. With Conda (after activating an environment):
    ```bash
-   # After activating an environment
    conda install -c conda-forge nviwatch
    ```
 
-2. With Mamba:
+2. With Mamba (after activating an environment):
    ```bash
-   # After activating an environment
    mamba install -c conda-forge nviwatch
    ```
 
-3. With Pixi:
+3. With Pixi (user-global install):
    ```bash
-   # Install nviwatch user-globally, not into a specific environment 
    pixi global install --channel conda-forge nviwatch
    ```
 
-4. Once installed, you can run NviWatch with:
+4. Once the installation is complete, you can run NviWatch from anywhere in your terminal:
    ```bash
    nviwatch
    ```
