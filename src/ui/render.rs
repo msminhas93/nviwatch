@@ -1,6 +1,9 @@
 use crate::app_state::AppState;
 use crate::gpu::info::GpuInfo;
-use crate::ui::widgets::{render_footer, render_gpu_graphs, render_help};
+use crate::system_monitor::SortMode;
+use crate::ui::widgets::{
+    render_cpu_info, render_cpu_utilization, render_footer, render_gpu_graphs, render_help,
+};
 use crate::utils::format_memory_size;
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -13,6 +16,9 @@ const GRAPHS_MIN: u16 = 8;
 /// Borders + header + ≥1 process row + footer line.
 const PROCESS_MIN: u16 = 6;
 const MIN_WIDTH: u16 = 72;
+/// Wider + taller floor for the split CPU|GPU layout.
+const CPU_MIN_WIDTH: u16 = 96;
+const CPU_MIN_HEIGHT: u16 = 28;
 
 /// Borders (2) + header (1) + one row per GPU (at least 1 placeholder when empty).
 fn gpu_info_height(num_gpus: usize) -> u16 {
@@ -23,18 +29,15 @@ fn required_height(num_gpus: usize) -> u16 {
     gpu_info_height(num_gpus) + GRAPHS_MIN + PROCESS_MIN
 }
 
-fn render_terminal_too_small(f: &mut Frame, area: Rect, required_h: u16) {
-    let need_w = area.width < MIN_WIDTH;
+fn render_terminal_too_small(f: &mut Frame, area: Rect, min_w: u16, required_h: u16) {
+    let need_w = area.width < min_w;
     let need_h = area.height < required_h;
     let size_hint = match (need_w, need_h) {
         (true, true) => format!(
-            "Need at least {MIN_WIDTH} cols × {required_h} rows\n(now {}×{})",
+            "Need at least {min_w} cols × {required_h} rows\n(now {}×{})",
             area.width, area.height
         ),
-        (true, false) => format!(
-            "Need at least {MIN_WIDTH} columns (now {})",
-            area.width
-        ),
+        (true, false) => format!("Need at least {min_w} columns (now {})", area.width),
         (false, true) => format!(
             "Need at least {required_h} rows (now {})",
             area.height
@@ -74,20 +77,30 @@ fn render_terminal_too_small(f: &mut Frame, area: Rect, required_h: u16) {
 }
 
 pub fn ui(f: &mut Frame, app_state: &AppState) {
+    if app_state.show_help {
+        // Help is usable even in a short terminal — scroll within the pane.
+        // Skip the main-dashboard minimum-size gate for this overlay.
+        render_help(f, f.area(), app_state.help_scroll, app_state.cpu_monitoring);
+        return;
+    }
+
+    if app_state.cpu_monitoring {
+        ui_with_cpu(f, app_state);
+    } else {
+        ui_gpu_only(f, app_state);
+    }
+}
+
+/// Upstream layout: GPU Info, GPU graphs, and the GPU process tray stacked
+/// vertically. This is the default (no `--cpu`) view.
+fn ui_gpu_only(f: &mut Frame, app_state: &AppState) {
     let area = f.area();
     let num_gpus = app_state.gpu_infos.len();
     let gpu_info_h = gpu_info_height(num_gpus);
     let required_h = required_height(num_gpus);
 
-    if app_state.show_help {
-        // Help is usable even in a short terminal — scroll within the pane.
-        // Skip the main-dashboard minimum-size gate for this overlay.
-        render_help(f, area, app_state.help_scroll);
-        return;
-    }
-
     if area.width < MIN_WIDTH || area.height < required_h {
-        render_terminal_too_small(f, area, required_h);
+        render_terminal_too_small(f, area, MIN_WIDTH, required_h);
         return;
     }
 
@@ -106,6 +119,48 @@ pub fn ui(f: &mut Frame, app_state: &AppState) {
     render_gpu_info(f, chunks[0], &app_state.gpu_infos);
     render_gpu_graphs(f, chunks[1], app_state);
     render_process_list(f, chunks[2], app_state);
+}
+
+/// `--cpu` layout: CPU panels (left) + GPU panels (right) over a full-width
+/// system-wide process tray.
+fn ui_with_cpu(f: &mut Frame, app_state: &AppState) {
+    let area = f.area();
+    if area.width < CPU_MIN_WIDTH || area.height < CPU_MIN_HEIGHT {
+        render_terminal_too_small(f, area, CPU_MIN_WIDTH, CPU_MIN_HEIGHT);
+        return;
+    }
+
+    let root = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Percentage(58), Constraint::Percentage(42)].as_ref())
+        .split(area);
+    let top = root[0];
+    let bottom = root[1];
+
+    let columns = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(42), Constraint::Percentage(58)].as_ref())
+        .split(top);
+    let left = columns[0];
+    let right = columns[1];
+
+    let left_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(7), Constraint::Min(0)].as_ref())
+        .split(left);
+    render_cpu_info(f, left_chunks[0], &app_state.cpu_stats);
+    render_cpu_utilization(f, left_chunks[1], app_state);
+
+    let num_gpus = app_state.gpu_infos.len() as u16;
+    let gpu_info_h = (num_gpus + 3).clamp(4, 12);
+    let right_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(gpu_info_h), Constraint::Min(0)].as_ref())
+        .split(right);
+    render_gpu_info(f, right_chunks[0], &app_state.gpu_infos);
+    render_gpu_graphs(f, right_chunks[1], app_state);
+
+    render_system_process_list(f, bottom, app_state);
 }
 
 pub fn render_gpu_info(f: &mut Frame, area: Rect, gpu_infos: &[GpuInfo]) {
@@ -247,6 +302,8 @@ pub fn render_gpu_info(f: &mut Frame, area: Rect, gpu_infos: &[GpuInfo]) {
 
     f.render_widget(table, gpu_area);
 }
+
+/// Default (GPU-only) process tray.
 pub fn render_process_list(f: &mut Frame, area: Rect, app_state: &AppState) {
     let layout = Layout::default()
         .direction(Direction::Vertical)
@@ -350,20 +407,168 @@ pub fn render_process_list(f: &mut Frame, area: Rect, app_state: &AppState) {
     .column_spacing(COL_GAP);
 
     if let Some(error_msg) = &app_state.error_message {
-        let error_text = textwrap::wrap(error_msg, process_area.width as usize - 2);
+        let wrap_width = (process_area.width as usize).saturating_sub(2).max(1);
+        let error_text = textwrap::wrap(error_msg, wrap_width);
         let error_paragraph = Paragraph::new(error_text.join("\n"))
             .style(Style::default().fg(Color::Red))
             .block(Block::default().borders(Borders::ALL).title("Error"));
-        let error_area = Rect {
-            x: process_area.x,
-            y: process_area.y + process_area.height - 3,
-            width: process_area.width,
-            height: 3,
-        };
-        f.render_widget(error_paragraph, error_area);
+        if process_area.height >= 3 {
+            let error_area = Rect {
+                x: process_area.x,
+                y: process_area.y + process_area.height - 3,
+                width: process_area.width,
+                height: 3,
+            };
+            f.render_widget(error_paragraph, error_area);
+        }
     }
 
     f.render_widget(table, process_area);
+    render_footer(f, footer_area, app_state);
+}
+
+/// `--cpu` process tray: unified system-wide list (already sorted by sort_mode).
+pub fn render_system_process_list(f: &mut Frame, area: Rect, app_state: &AppState) {
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(0), Constraint::Length(1)].as_ref())
+        .split(area);
+
+    let main_area = layout[0];
+    let footer_area = layout[1];
+
+    let sort_label = match app_state.sort_mode {
+        SortMode::Cpu => "CPU%",
+        SortMode::GpuMemory => "GPU mem",
+    };
+    let block = Block::default().borders(Borders::ALL).title(format!(
+        "Processes — top {} by {}",
+        app_state.processes.len(),
+        sort_label
+    ));
+    f.render_widget(block.clone(), main_area);
+    let process_area = block.inner(main_area);
+
+    let selected_style = if app_state.pending_op.is_pending() {
+        Style::default()
+            .bg(Color::Yellow)
+            .fg(Color::Black)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+            .bg(Color::DarkGray)
+            .fg(Color::White)
+            .add_modifier(Modifier::BOLD)
+    };
+
+    let rows: Vec<Row> = app_state
+        .processes
+        .iter()
+        .enumerate()
+        .map(|(index, p)| {
+            let gpu_col = match p.gpu_index {
+                Some(i) => i.to_string(),
+                None => "-".to_string(),
+            };
+            let gpu_mem_col = match p.gpu_memory {
+                Some(m) => format_memory_size(m),
+                None => "-".to_string(),
+            };
+
+            let cells = [
+                gpu_col,
+                p.pid.to_string(),
+                gpu_mem_col,
+                format!("{:.1}", p.cpu_usage),
+                format_memory_size(p.memory_usage),
+                p.username.clone(),
+                p.state.to_string(),
+                p.command.clone(),
+            ];
+
+            if index == app_state.selected_process {
+                Row::new(cells.into_iter().map(|text| Cell::from(text).style(selected_style)))
+                    .style(selected_style)
+            } else {
+                let [gpu, pid, gpu_mem, cpu, mem, user, state, cmd] = cells;
+                Row::new(vec![
+                    Cell::from(gpu).style(Style::default().fg(Color::Cyan)),
+                    Cell::from(pid).style(Style::default().fg(Color::Yellow)),
+                    Cell::from(gpu_mem).style(Style::default().fg(Color::Green)),
+                    Cell::from(cpu).style(Style::default().fg(Color::Magenta)),
+                    Cell::from(mem).style(Style::default().fg(Color::Blue)),
+                    Cell::from(user).style(Style::default().fg(Color::Red)),
+                    Cell::from(state).style(Style::default().fg(Color::Gray)),
+                    Cell::from(cmd),
+                ])
+            }
+        })
+        .collect();
+
+    let table = Table::new(
+        rows,
+        &[
+            Constraint::Length(4),
+            Constraint::Length(7),
+            Constraint::Length(9),
+            Constraint::Length(6),
+            Constraint::Length(9),
+            Constraint::Length(12),
+            Constraint::Length(2),
+            Constraint::Percentage(100),
+        ],
+    )
+    .header(Row::new(vec![
+        Cell::from("GPU").style(
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Cell::from("PID").style(
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Cell::from("GPU Mem").style(
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Cell::from("CPU%").style(
+            Style::default()
+                .fg(Color::Magenta)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Cell::from("Mem").style(
+            Style::default()
+                .fg(Color::Blue)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Cell::from("User").style(Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+        Cell::from("S").style(Style::default().fg(Color::Gray).add_modifier(Modifier::BOLD)),
+        Cell::from("Command").style(Style::default().add_modifier(Modifier::BOLD)),
+    ]))
+    .column_spacing(1);
+
+    f.render_widget(table, process_area);
+
+    if let Some(error_msg) = &app_state.error_message {
+        let wrap_width = (process_area.width as usize).saturating_sub(2).max(1);
+        let error_text = textwrap::wrap(error_msg, wrap_width);
+        let error_paragraph = Paragraph::new(error_text.join("\n"))
+            .style(Style::default().fg(Color::Red))
+            .block(Block::default().borders(Borders::ALL).title("Error"));
+        if process_area.height >= 3 {
+            let error_area = Rect {
+                x: process_area.x,
+                y: process_area.y + process_area.height - 3,
+                width: process_area.width,
+                height: 3,
+            };
+            f.render_widget(error_paragraph, error_area);
+        }
+    }
+
     render_footer(f, footer_area, app_state);
 }
 

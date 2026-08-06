@@ -3,6 +3,7 @@ mod error;
 mod gpu;
 mod influx_local;
 mod keybinds;
+mod system_monitor;
 mod ui;
 mod utils;
 
@@ -57,6 +58,13 @@ fn main() -> Result<()> {
                 .action(clap::ArgAction::SetTrue),
         )
         .arg(
+            Arg::new("cpu")
+                .short('c')
+                .long("cpu")
+                .help("Enable CPU and system-wide process monitoring (CPU panels, system process tray, sort with 's', and system metrics streaming)")
+                .action(clap::ArgAction::SetTrue),
+        )
+        .arg(
             Arg::new("influx-url")
                 .long("influx-url")
                 .value_name("URL")
@@ -89,7 +97,7 @@ fn main() -> Result<()> {
     let watch_interval = matches
         .get_one::<String>("watch")
         .map(|s| s.parse().expect("Invalid number"))
-        .unwrap_or(1000);
+        .unwrap_or(300);
 
     let nvml = Nvml::init()?;
 
@@ -138,7 +146,7 @@ fn main() -> Result<()> {
                     width: size.width,
                     height: size.height,
                 };
-                let max_scroll = help_max_scroll(help_area);
+                let max_scroll = help_max_scroll(help_area, app_state.cpu_monitoring);
                 let page = help_area.height.saturating_sub(2).max(1);
 
                 match key.code {
@@ -217,8 +225,10 @@ fn main() -> Result<()> {
                         }
                     }
                     KeybindAggregate::Right => {
+                        // `+ 1 <` rather than `< len() - 1` so we never underflow
+                        // when gpu_infos is empty.
                         if app_state.use_tabbed_graphs
-                            && app_state.selected_gpu_tab < app_state.gpu_infos.len() - 1
+                            && app_state.selected_gpu_tab + 1 < app_state.gpu_infos.len()
                         {
                             app_state.selected_gpu_tab += 1;
                         }
@@ -279,6 +289,10 @@ fn main() -> Result<()> {
                     app_state.use_tabbed_graphs = false;
                     app_state.use_bar_charts = true;
                 }
+                KeyCode::Char('s') if app_state.cpu_monitoring && !ctrl => {
+                    app_state.pending_op = PendingOp::None;
+                    app_state.cycle_sort_mode();
+                }
                 _ => {}
             }
         }
@@ -291,12 +305,15 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-/// Kill the process under the current selection (display order). Surfaces a UI
+/// Kill the process under the current selection (active tray order). Surfaces a UI
 /// error when the selection is stale (e.g. the process exited between frames).
 fn kill_highlighted_process(app_state: &mut AppState) {
-    match app_state.selected_process_entry() {
-        Some((_gpu, process)) => {
-            if let Err(e) = kill_selected_process(process.pid, &process.command) {
+    match app_state.selected_kill_target() {
+        Some((pid, command)) => {
+            // Clone command: kill_selected_process takes &str but we drop the
+            // borrow before mutating error_message.
+            let command = command.to_string();
+            if let Err(e) = kill_selected_process(pid, &command) {
                 app_state.error_message = Some(e.to_string());
             }
         }

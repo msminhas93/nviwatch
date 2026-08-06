@@ -213,9 +213,10 @@ To build and run NviWatch, ensure you have Rust and Cargo installed on your syst
 
 NviWatch provides a command-line interface with several options:
 
-- `-w, --watch <MILLISECONDS>`: Set the refresh interval in milliseconds. Default is 1000 ms.
+- `-w, --watch <MILLISECONDS>`: Set the refresh interval in milliseconds. Default is 300 ms.
 - `-t, --tabbed-graphs`: Display GPU graphs in a tabbed view.
 - `-b, --bar-chart`: Display GPU graphs as bar charts.
+- `-c, --cpu`: Enable CPU and system-wide process monitoring (CPU/RAM panels, top-50 system process tray sortable with `s`, and optional InfluxDB `system_metrics`). Without this flag, nviwatch monitors GPUs only. Pair with a longer refresh (e.g. `--watch 1500`) for a less jittery process list — short windows (default 300 ms) re-rank by instantaneous CPU% every tick, which looks jumpy compared to htop’s ~1.5 s default.
 - `--influx-url <URL>`: InfluxDB server URL (e.g., "http://localhost:8086").
 - `--influx-org <ORG>`: InfluxDB organization name.
 - `--influx-bucket <BUCKET>`: InfluxDB bucket name for storing metrics.
@@ -225,6 +226,9 @@ NviWatch provides a command-line interface with several options:
 ```bash
 # Run with default settings
 ./nviwatch
+
+# Run with CPU + GPU monitoring (calmer list refresh, closer to htop)
+./nviwatch --cpu --watch 1500
 
 # Run with custom refresh rate and tabbed graphs
 ./nviwatch --watch 500 --tabbed-graphs
@@ -239,6 +243,7 @@ NviWatch provides a command-line interface with several options:
 # Run with all features enabled
 ./nviwatch \
   --watch 1000 \
+  --cpu \
   --tabbed-graphs \
   --influx-url "http://localhost:8086" \
   --influx-org "my-org" \
@@ -252,9 +257,11 @@ NviWatch provides a command-line interface with several options:
 - **↑/↓**: Navigate through the list of processes
 - **←/→**: Switch between GPU tabs (when using tabbed graphs)
 - **x**: Terminate the selected process
+- **s**: Toggle process sort (CPU% ↔ GPU memory) — only with `--cpu`
 - **d**: Switch to default view mode
 - **t**: Switch to tabbed graphs view mode
 - **b**: Switch to bar charts view mode
+- **?**: Toggle help overlay
 
 ## View Modes
 
@@ -285,3 +292,4 @@ Contributions are welcome! Please open an issue or submit a pull request for any
 
 - Built with [Rust](https://www.rust-lang.org/) and [Ratatui](https://github.com/ratatui/ratatui).
 - Utilizes the [NVIDIA Management Library (NVML)](https://developer.nvidia.com/nvidia-management-library-nvml) via the [nvml_wrapper crate](https://docs.rs/nvml-wrapper/latest/nvml_wrapper/).
+- Optional `--cpu` monitoring inspired by a contribution from [@jpswensen](https://github.com/jpswensen) ([#10](https://github.com/msminhas93/nviwatch/issues/10)).

@@ -47,11 +47,41 @@ fn collect_gpu_processes(
         .collect()
 }
 
+/// Lean PID + GPU-memory records for `--cpu` mode (system scan enriches later).
+/// Compute and graphics lists can overlap; keep the larger memory figure per PID.
+fn collect_gpu_processes_lean(
+    processes: impl IntoIterator<Item = nvml::struct_wrappers::device::ProcessInfo>,
+) -> Vec<GpuProcessInfo> {
+    let mut out: Vec<GpuProcessInfo> = Vec::new();
+    for p in processes {
+        let used_gpu_memory = match p.used_gpu_memory {
+            nvml::enums::device::UsedGpuMemory::Used(bytes) => bytes,
+            nvml::enums::device::UsedGpuMemory::Unavailable => 0,
+        };
+        if let Some(existing) = out.iter_mut().find(|e| e.pid == p.pid) {
+            if used_gpu_memory > existing.used_gpu_memory {
+                existing.used_gpu_memory = used_gpu_memory;
+            }
+        } else {
+            out.push(GpuProcessInfo {
+                pid: p.pid,
+                used_gpu_memory,
+                username: String::new(),
+                command: String::new(),
+                cpu_percent: None,
+                memory_usage: 0,
+            });
+        }
+    }
+    out
+}
+
 fn gpu_info_from_device(
     index: usize,
     device: Device<'_>,
     previous_samples: &HashMap<u32, CpuSample>,
     next_samples: &mut HashMap<u32, CpuSample>,
+    cpu_monitoring: bool,
 ) -> Result<GpuInfo> {
     let name = device.name()?;
     let temperature = device.temperature(TemperatureSensor::Gpu)?;
@@ -62,16 +92,26 @@ fn gpu_info_from_device(
     let power_limit = device.enforced_power_limit()? / 1000; // Convert mW to W
     let clock_freq = device.clock_info(nvml::enum_wrappers::device::Clock::Graphics)?;
 
-    let compute_processes = collect_gpu_processes(
-        device.running_compute_processes()?,
-        previous_samples,
-        next_samples,
-    );
-    let graphics_processes = collect_gpu_processes(
-        device.running_graphics_processes()?,
-        previous_samples,
-        next_samples,
-    );
+    let processes = if cpu_monitoring {
+        collect_gpu_processes_lean(
+            device
+                .running_compute_processes()?
+                .into_iter()
+                .chain(device.running_graphics_processes()?.into_iter()),
+        )
+    } else {
+        let compute_processes = collect_gpu_processes(
+            device.running_compute_processes()?,
+            previous_samples,
+            next_samples,
+        );
+        let graphics_processes = collect_gpu_processes(
+            device.running_graphics_processes()?,
+            previous_samples,
+            next_samples,
+        );
+        [compute_processes, graphics_processes].concat()
+    };
 
     Ok(GpuInfo {
         index,
@@ -83,7 +123,7 @@ fn gpu_info_from_device(
         power_usage,
         power_limit,
         clock_freq,
-        processes: [compute_processes, graphics_processes].concat(),
+        processes,
     })
 }
 
@@ -120,11 +160,18 @@ pub fn collect_gpu_info(nvml: &Nvml, app_state: &mut AppState) -> Result<Vec<Gpu
     let previous_samples = app_state.cpu_samples.clone();
     let mut next_samples = HashMap::new();
 
+    let cpu_monitoring = app_state.cpu_monitoring;
+
     for index in 0..device_count {
         let device = nvml.device_by_index(index as u32)?;
 
-        let gpu_info =
-            gpu_info_from_device(index, device, &previous_samples, &mut next_samples)?;
+        let gpu_info = gpu_info_from_device(
+            index,
+            device,
+            &previous_samples,
+            &mut next_samples,
+            cpu_monitoring,
+        )?;
 
         // Update historical data
         if app_state.power_history.len() <= index {
@@ -151,7 +198,10 @@ pub fn collect_gpu_info(nvml: &Nvml, app_state: &mut AppState) -> Result<Vec<Gpu
         app_state.utilization_history.truncate(device_count);
     }
 
-    app_state.cpu_samples = next_samples;
+    // Per-process CPU samples only matter in GPU-only mode.
+    if !cpu_monitoring {
+        app_state.cpu_samples = next_samples;
+    }
 
     Ok(gpu_infos)
 }
