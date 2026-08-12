@@ -187,7 +187,7 @@ If you have Rust and Cargo installed on your system, you can easily install NviW
    nviwatch
    ```
 
-Note: Ensure you have the NVIDIA Management Library (NVML) available on your system before running NviWatch.
+Note: Ensure you have the NVIDIA Management Library (NVML) available on your system before running NviWatch. On Windows, `cargo install nviwatch` builds and runs as well; the `--cpu` view omits load average there, as it has no Windows equivalent.
 
 ### Option 3: Install via Conda, Mamba, or Pixi
 

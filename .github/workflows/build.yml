@@ -52,3 +52,26 @@ jobs:
         asset_path: ./target/release/nviwatch
         asset_name: nviwatch
         asset_content_type: application/octet-stream
+
+  # Windows release binary. Additive: the Linux job above is unchanged.
+  # nvml-wrapper loads nvml.dll at runtime (dynamic linking), so the runner
+  # needs no NVIDIA driver or CUDA toolkit to build — only to run.
+  build-windows:
+    needs: build-and-release
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Install Rust
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+        override: true
+
+    - name: Build Release
+      run: cargo build --release
+
+    - name: Upload Windows binary to release
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: gh release upload "${{ github.event.inputs.release_tag }}" target/release/nviwatch.exe

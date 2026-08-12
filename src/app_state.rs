@@ -5,8 +5,8 @@ use crate::gpu::info::{GpuInfo, collect_gpu_info};
 use crate::influx_local::{InfluxDBConfig, TempInfluxConfig};
 use crate::keybinds::PendingOp;
 use crate::system_monitor::{
-    collect_system_stats, rebuild_process_tray, system_metrics_write_query, CpuStats,
-    KernelCpuSample, SortMode, SystemProcess,
+    CpuStats, KernelCpuSample, SortMode, SystemProcess, collect_system_stats, rebuild_process_tray,
+    system_metrics_write_query,
 };
 use crate::utils::system::CpuSample;
 use nvml::Nvml;
@@ -183,9 +183,7 @@ impl AppState {
                 self.last_update = Some(std::time::Instant::now());
                 true
             }
-            Some(t)
-                if t.elapsed() >= std::time::Duration::from_millis(interval_ms) =>
-            {
+            Some(t) if t.elapsed() >= std::time::Duration::from_millis(interval_ms) => {
                 self.last_update = Some(std::time::Instant::now());
                 true
             }
@@ -372,10 +370,7 @@ mod tests {
             power_usage: 0,
             power_limit: 0,
             clock_freq: 0,
-            processes: vec![
-                gpu_proc(10, 100, "small"),
-                gpu_proc(20, 900, "big"),
-            ],
+            processes: vec![gpu_proc(10, 100, "small"), gpu_proc(20, 900, "big")],
         });
         // Display order is GPU-memory desc → big first.
         state.selected_process = 0;
