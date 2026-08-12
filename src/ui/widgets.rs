@@ -366,7 +366,7 @@ fn render_cpu_meters(f: &mut Frame, area: Rect, cpu: &CpuStats) {
     }
 
     let cols = (inner.width as usize / meter_cell_width()).max(1);
-    let rows_n = (cores + cols - 1) / cols;
+    let rows_n = cores.div_ceil(cols);
 
     let mut lines: Vec<Line> = Vec::with_capacity(rows_n);
     for r in 0..rows_n {

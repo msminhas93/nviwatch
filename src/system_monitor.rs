@@ -320,11 +320,11 @@ mod imp {
         let mut sum = 0.0;
         let mut count = 0u32;
         for i in 0..info.num_cores() {
-            if let Some(mhz) = info.get_field(i, "cpu MHz") {
-                if let Ok(v) = mhz.trim().parse::<f64>() {
-                    sum += v;
-                    count += 1;
-                }
+            if let Some(mhz) = info.get_field(i, "cpu MHz")
+                && let Ok(v) = mhz.trim().parse::<f64>()
+            {
+                sum += v;
+                count += 1;
             }
         }
         let freq = if count > 0 { sum / count as f64 } else { 0.0 };

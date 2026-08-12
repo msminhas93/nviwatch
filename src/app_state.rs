@@ -212,10 +212,10 @@ impl AppState {
     ) -> Result<()> {
         self.gpu_infos = collect_gpu_info(nvml, self)?;
 
-        if self.cpu_monitoring {
-            if let Err(e) = collect_system_stats(self) {
-                self.error_message = Some(format!("System info error: {e}"));
-            }
+        if self.cpu_monitoring
+            && let Err(e) = collect_system_stats(self)
+        {
+            self.error_message = Some(format!("System info error: {e}"));
         }
 
         self.clamp_selection();
@@ -296,8 +296,10 @@ mod tests {
 
     #[test]
     fn test_app_state_initialization() {
-        let mut state = AppState::default();
-        state.use_tabbed_graphs = true;
+        let state = AppState {
+            use_tabbed_graphs: true,
+            ..Default::default()
+        };
 
         assert_eq!(state.selected_process, 0);
         assert_eq!(state.selected_gpu_tab, 0);
@@ -330,8 +332,10 @@ mod tests {
 
     #[test]
     fn test_total_processes_cpu_mode_uses_system_list() {
-        let mut state = AppState::default();
-        state.cpu_monitoring = true;
+        let mut state = AppState {
+            cpu_monitoring: true,
+            ..Default::default()
+        };
         state.gpu_infos.push(GpuInfo {
             index: 0,
             name: "G".into(),
@@ -381,8 +385,10 @@ mod tests {
 
     #[test]
     fn test_selected_kill_target_cpu_mode() {
-        let mut state = AppState::default();
-        state.cpu_monitoring = true;
+        let mut state = AppState {
+            cpu_monitoring: true,
+            ..Default::default()
+        };
         state.processes.push(SystemProcess {
             pid: 7,
             gpu_memory: None,
@@ -452,8 +458,8 @@ mod tests {
         let state = AppState::default();
         // Should not be able to select any process when there are no GPUs
         let total_processes = state.total_process_count();
-        assert!(!(0 < total_processes));
-        assert!(!(1 < total_processes));
+        assert!(total_processes == 0);
+        assert!(total_processes <= 1);
     }
 
     #[test]
