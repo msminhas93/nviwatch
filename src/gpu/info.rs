@@ -97,7 +97,7 @@ fn gpu_info_from_device(
             device
                 .running_compute_processes()?
                 .into_iter()
-                .chain(device.running_graphics_processes()?.into_iter()),
+                .chain(device.running_graphics_processes()?),
         )
     } else {
         let compute_processes = collect_gpu_processes(

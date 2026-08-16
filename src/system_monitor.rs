@@ -1,11 +1,7 @@
 //! System-wide CPU / memory / process scanning used by `--cpu` mode.
 
 use crate::app_state::AppState;
-use crate::error::NviError;
 use crate::gpu::info::GpuInfo;
-use nix::unistd::{Uid, User};
-use procfs::prelude::*;
-use procfs::process::{all_processes, Process};
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -102,126 +98,6 @@ pub fn meter_bar(pct: f32) -> (String, String) {
     ("|".repeat(filled), " ".repeat(BAR_WIDTH - filled))
 }
 
-/// Collect CPU stats, system memory, and the top-N process list.
-pub fn collect_system_stats(app_state: &mut AppState) -> Result<(), NviError> {
-    let ks = procfs::KernelStats::current().map_err(|e| NviError::General(e.to_string()))?;
-    let cur_total = kernel_cpu_sample(&ks.total);
-    let total_delta = app_state
-        .prev_cpu_total
-        .as_ref()
-        .map(|p| cur_total.total.saturating_sub(p.total))
-        .unwrap_or(0);
-    let aggregate_usage = app_state
-        .prev_cpu_total
-        .as_ref()
-        .map(|p| pct(p, &cur_total))
-        .unwrap_or(0.0);
-    let logical_cores = ks.cpu_time.len();
-    let cur_per_core: Vec<KernelCpuSample> = ks.cpu_time.iter().map(kernel_cpu_sample).collect();
-    let per_core_usage: Vec<f32> = cur_per_core
-        .iter()
-        .enumerate()
-        .map(|(i, cur)| {
-            app_state
-                .prev_cpu_per_core
-                .get(i)
-                .map(|p| pct(p, cur))
-                .unwrap_or(0.0)
-        })
-        .collect();
-
-    let (model, frequency_mhz) =
-        read_cpu_model_freq().unwrap_or_else(|| ("Unknown CPU".to_string(), 0.0));
-    let load_avg = procfs::LoadAverage::current()
-        .map(|l| (l.one, l.five, l.fifteen))
-        .unwrap_or((0.0, 0.0, 0.0));
-    let mem = procfs::Meminfo::current().map_err(|e| NviError::General(e.to_string()))?;
-    let mem_total = mem.mem_total;
-    let mem_used = mem_total.saturating_sub(mem.mem_available.unwrap_or(mem.mem_free));
-    let swap_total = mem.swap_total;
-    let swap_used = swap_total.saturating_sub(mem.swap_free);
-
-    // Commit CPU / memory panels even if the process scan fails below.
-    app_state.cpu_stats = CpuStats {
-        model,
-        logical_cores,
-        per_core_usage,
-        aggregate_usage,
-        frequency_mhz,
-        load_avg,
-        mem_total,
-        mem_used,
-        swap_total,
-        swap_used,
-    };
-    let had_baseline = app_state.prev_cpu_total.is_some();
-    app_state.prev_cpu_total = Some(cur_total);
-    app_state.prev_cpu_per_core = cur_per_core;
-
-    if had_baseline {
-        app_state
-            .cpu_usage_history
-            .push(f64::from(aggregate_usage).clamp(0.0, 100.0));
-        while app_state.cpu_usage_history.len() > HISTORY_CAP {
-            app_state.cpu_usage_history.remove(0);
-        }
-    }
-
-    let gpu_map = build_gpu_map(&app_state.gpu_infos);
-    let page = procfs::page_size();
-    let mut procs: Vec<SystemProcess> = Vec::new();
-    let mut new_prev: HashMap<i32, u64> = HashMap::new();
-
-    let iter = all_processes().map_err(|e| {
-        // Keep the previous tray and CPU baselines so a transient /proc failure
-        // does not blank process monitoring or reset %CPU deltas.
-        NviError::General(format!("Process list unavailable: {e}"))
-    })?;
-
-    for p in iter.filter_map(|p| p.ok()) {
-        if let Ok(stat) = p.stat() {
-            let pid = stat.pid;
-            let ticks = stat.utime + stat.stime;
-            new_prev.insert(pid, ticks);
-
-            let cpu_usage = if total_delta > 0 {
-                match app_state.prev_proc_times.get(&pid) {
-                    Some(&prev) => {
-                        (ticks.saturating_sub(prev) as f64 / total_delta as f64
-                            * logical_cores as f64
-                            * 100.0) as f32
-                    }
-                    None => 0.0,
-                }
-            } else {
-                0.0
-            };
-
-            let (gpu_memory, gpu_index) = match gpu_map.get(&pid) {
-                Some(&(m, i)) => (Some(m), Some(i)),
-                None => (None, None),
-            };
-
-            procs.push(SystemProcess {
-                pid,
-                gpu_memory,
-                gpu_index,
-                username: String::new(),
-                command: stat.comm.clone(),
-                cpu_usage,
-                memory_usage: stat.rss * page,
-                state: stat.state,
-            });
-        }
-    }
-
-    app_state.prev_proc_times = new_prev;
-    app_state.process_scan = procs;
-    rebuild_process_tray(app_state);
-
-    Ok(())
-}
-
 /// Sort the last full scan by the active mode, keep top N, and enrich for display.
 pub fn rebuild_process_tray(app_state: &mut AppState) {
     let mut procs = app_state.process_scan.clone();
@@ -229,23 +105,6 @@ pub fn rebuild_process_tray(app_state: &mut AppState) {
     procs.truncate(TOP_N);
     enrich_processes(&mut procs, &mut app_state.uid_cache);
     app_state.processes = procs;
-}
-
-fn enrich_processes(procs: &mut [SystemProcess], uid_cache: &mut HashMap<u32, String>) {
-    for proc in procs.iter_mut() {
-        match Process::new(proc.pid) {
-            Ok(process) => {
-                if let Ok(uid) = process.uid() {
-                    proc.username = username_for(uid, uid_cache);
-                }
-                match process.cmdline() {
-                    Ok(cmd) if !cmd.join(" ").is_empty() => proc.command = cmd.join(" "),
-                    _ => proc.command = format!("[{}]", proc.command),
-                }
-            }
-            Err(_) => proc.command = format!("[{}]", proc.command),
-        }
-    }
 }
 
 /// Build an InfluxDB write for system-wide CPU/memory (used with `--cpu` + Influx).
@@ -262,23 +121,16 @@ pub fn system_metrics_write_query(cpu: &CpuStats) -> influxdb::WriteQuery {
         .add_field("mem_total", cpu.mem_total as i64)
         .add_field("swap_used", cpu.swap_used as i64)
         .add_field("swap_total", cpu.swap_total as i64)
+        // load_1 is 0.0 on Windows (no load average there); the schema is kept
+        // stable across platforms deliberately.
         .add_field("load_1", cpu.load_avg.0 as f64)
 }
 
-fn kernel_cpu_sample(t: &procfs::CpuTime) -> KernelCpuSample {
-    let idle = t.idle + t.iowait.unwrap_or(0);
-    let total = t.user
-        + t.nice
-        + t.system
-        + t.idle
-        + t.iowait.unwrap_or(0)
-        + t.irq.unwrap_or(0)
-        + t.softirq.unwrap_or(0)
-        + t.steal.unwrap_or(0);
-    KernelCpuSample { total, idle }
-}
-
 /// Percentage busy between two cumulative samples.
+// Only the unix backend calls this from non-test code (the Windows backend
+// has no cumulative kernel counters to feed it); the platform-neutral tests
+// below exercise it on both platforms.
+#[cfg_attr(windows, allow(dead_code))]
 fn pct(prev: &KernelCpuSample, cur: &KernelCpuSample) -> f32 {
     let dt = cur.total.saturating_sub(prev.total);
     let di = cur.idle.saturating_sub(prev.idle).min(dt);
@@ -287,23 +139,6 @@ fn pct(prev: &KernelCpuSample, cur: &KernelCpuSample) -> f32 {
     } else {
         ((dt - di) as f64 / dt as f64 * 100.0) as f32
     }
-}
-
-fn read_cpu_model_freq() -> Option<(String, f64)> {
-    let info = procfs::CpuInfo::current().ok()?;
-    let model = info.model_name(0).unwrap_or("Unknown CPU").to_string();
-    let mut sum = 0.0;
-    let mut count = 0u32;
-    for i in 0..info.num_cores() {
-        if let Some(mhz) = info.get_field(i, "cpu MHz") {
-            if let Ok(v) = mhz.trim().parse::<f64>() {
-                sum += v;
-                count += 1;
-            }
-        }
-    }
-    let freq = if count > 0 { sum / count as f64 } else { 0.0 };
-    Some((model, freq))
 }
 
 /// Map PID -> (total_used_gpu_memory, gpu_index) from NVML-collected GPU process lists.
@@ -329,18 +164,429 @@ pub fn build_gpu_map(gpu_infos: &[GpuInfo]) -> HashMap<i32, (u64, usize)> {
         .collect()
 }
 
-fn username_for(uid: u32, cache: &mut HashMap<u32, String>) -> String {
-    if let Some(name) = cache.get(&uid) {
-        return name.clone();
+#[cfg(unix)]
+mod imp {
+    use super::{
+        CpuStats, HISTORY_CAP, KernelCpuSample, SystemProcess, build_gpu_map, pct,
+        rebuild_process_tray,
+    };
+    use crate::app_state::AppState;
+    use crate::error::NviError;
+    use nix::unistd::{Uid, User};
+    use procfs::prelude::*;
+    use procfs::process::{Process, all_processes};
+    use std::collections::HashMap;
+
+    /// Collect CPU stats, system memory, and the top-N process list.
+    pub fn collect_system_stats(app_state: &mut AppState) -> Result<(), NviError> {
+        let ks = procfs::KernelStats::current().map_err(|e| NviError::General(e.to_string()))?;
+        let cur_total = kernel_cpu_sample(&ks.total);
+        let total_delta = app_state
+            .prev_cpu_total
+            .as_ref()
+            .map(|p| cur_total.total.saturating_sub(p.total))
+            .unwrap_or(0);
+        let aggregate_usage = app_state
+            .prev_cpu_total
+            .as_ref()
+            .map(|p| pct(p, &cur_total))
+            .unwrap_or(0.0);
+        let logical_cores = ks.cpu_time.len();
+        let cur_per_core: Vec<KernelCpuSample> =
+            ks.cpu_time.iter().map(kernel_cpu_sample).collect();
+        let per_core_usage: Vec<f32> = cur_per_core
+            .iter()
+            .enumerate()
+            .map(|(i, cur)| {
+                app_state
+                    .prev_cpu_per_core
+                    .get(i)
+                    .map(|p| pct(p, cur))
+                    .unwrap_or(0.0)
+            })
+            .collect();
+
+        let (model, frequency_mhz) =
+            read_cpu_model_freq().unwrap_or_else(|| ("Unknown CPU".to_string(), 0.0));
+        let load_avg = procfs::LoadAverage::current()
+            .map(|l| (l.one, l.five, l.fifteen))
+            .unwrap_or((0.0, 0.0, 0.0));
+        let mem = procfs::Meminfo::current().map_err(|e| NviError::General(e.to_string()))?;
+        let mem_total = mem.mem_total;
+        let mem_used = mem_total.saturating_sub(mem.mem_available.unwrap_or(mem.mem_free));
+        let swap_total = mem.swap_total;
+        let swap_used = swap_total.saturating_sub(mem.swap_free);
+
+        // Commit CPU / memory panels even if the process scan fails below.
+        app_state.cpu_stats = CpuStats {
+            model,
+            logical_cores,
+            per_core_usage,
+            aggregate_usage,
+            frequency_mhz,
+            load_avg,
+            mem_total,
+            mem_used,
+            swap_total,
+            swap_used,
+        };
+        let had_baseline = app_state.prev_cpu_total.is_some();
+        app_state.prev_cpu_total = Some(cur_total);
+        app_state.prev_cpu_per_core = cur_per_core;
+
+        if had_baseline {
+            app_state
+                .cpu_usage_history
+                .push(f64::from(aggregate_usage).clamp(0.0, 100.0));
+            while app_state.cpu_usage_history.len() > HISTORY_CAP {
+                app_state.cpu_usage_history.remove(0);
+            }
+        }
+
+        let gpu_map = build_gpu_map(&app_state.gpu_infos);
+        let page = procfs::page_size();
+        let mut procs: Vec<SystemProcess> = Vec::new();
+        let mut new_prev: HashMap<i32, u64> = HashMap::new();
+
+        let iter = all_processes().map_err(|e| {
+            // Keep the previous tray and CPU baselines so a transient /proc failure
+            // does not blank process monitoring or reset %CPU deltas.
+            NviError::General(format!("Process list unavailable: {e}"))
+        })?;
+
+        for p in iter.filter_map(|p| p.ok()) {
+            if let Ok(stat) = p.stat() {
+                let pid = stat.pid;
+                let ticks = stat.utime + stat.stime;
+                new_prev.insert(pid, ticks);
+
+                let cpu_usage = if total_delta > 0 {
+                    match app_state.prev_proc_times.get(&pid) {
+                        Some(&prev) => {
+                            (ticks.saturating_sub(prev) as f64 / total_delta as f64
+                                * logical_cores as f64
+                                * 100.0) as f32
+                        }
+                        None => 0.0,
+                    }
+                } else {
+                    0.0
+                };
+
+                let (gpu_memory, gpu_index) = match gpu_map.get(&pid) {
+                    Some(&(m, i)) => (Some(m), Some(i)),
+                    None => (None, None),
+                };
+
+                procs.push(SystemProcess {
+                    pid,
+                    gpu_memory,
+                    gpu_index,
+                    username: String::new(),
+                    command: stat.comm.clone(),
+                    cpu_usage,
+                    memory_usage: stat.rss * page,
+                    state: stat.state,
+                });
+            }
+        }
+
+        app_state.prev_proc_times = new_prev;
+        app_state.process_scan = procs;
+        rebuild_process_tray(app_state);
+
+        Ok(())
     }
-    let name = User::from_uid(Uid::from_raw(uid))
-        .ok()
-        .flatten()
-        .map(|u| u.name)
-        .unwrap_or_else(|| uid.to_string());
-    cache.insert(uid, name.clone());
-    name
+
+    pub(super) fn enrich_processes(
+        procs: &mut [SystemProcess],
+        uid_cache: &mut HashMap<u32, String>,
+    ) {
+        for proc in procs.iter_mut() {
+            match Process::new(proc.pid) {
+                Ok(process) => {
+                    if let Ok(uid) = process.uid() {
+                        proc.username = username_for(uid, uid_cache);
+                    }
+                    match process.cmdline() {
+                        Ok(cmd) if !cmd.join(" ").is_empty() => proc.command = cmd.join(" "),
+                        _ => proc.command = format!("[{}]", proc.command),
+                    }
+                }
+                Err(_) => proc.command = format!("[{}]", proc.command),
+            }
+        }
+    }
+
+    fn read_cpu_model_freq() -> Option<(String, f64)> {
+        let info = procfs::CpuInfo::current().ok()?;
+        let model = info.model_name(0).unwrap_or("Unknown CPU").to_string();
+        let mut sum = 0.0;
+        let mut count = 0u32;
+        for i in 0..info.num_cores() {
+            if let Some(mhz) = info.get_field(i, "cpu MHz")
+                && let Ok(v) = mhz.trim().parse::<f64>()
+            {
+                sum += v;
+                count += 1;
+            }
+        }
+        let freq = if count > 0 { sum / count as f64 } else { 0.0 };
+        Some((model, freq))
+    }
+
+    fn kernel_cpu_sample(t: &procfs::CpuTime) -> KernelCpuSample {
+        let idle = t.idle + t.iowait.unwrap_or(0);
+        let total = t.user
+            + t.nice
+            + t.system
+            + t.idle
+            + t.iowait.unwrap_or(0)
+            + t.irq.unwrap_or(0)
+            + t.softirq.unwrap_or(0)
+            + t.steal.unwrap_or(0);
+        KernelCpuSample { total, idle }
+    }
+
+    fn username_for(uid: u32, cache: &mut HashMap<u32, String>) -> String {
+        if let Some(name) = cache.get(&uid) {
+            return name.clone();
+        }
+        let name = User::from_uid(Uid::from_raw(uid))
+            .ok()
+            .flatten()
+            .map(|u| u.name)
+            .unwrap_or_else(|| uid.to_string());
+        cache.insert(uid, name.clone());
+        name
+    }
 }
+
+#[cfg(windows)]
+mod imp {
+    use super::{
+        CpuStats, HISTORY_CAP, KernelCpuSample, SystemProcess, build_gpu_map, rebuild_process_tray,
+    };
+    use crate::app_state::AppState;
+    use crate::error::NviError;
+    use crate::utils::system::{process_refresh_kind, with_probe};
+    use std::collections::HashMap;
+    use sysinfo::{CpuRefreshKind, ProcessStatus, ProcessesToUpdate};
+
+    /// Collect CPU stats, system memory, and the top-N process list.
+    pub fn collect_system_stats(app_state: &mut AppState) -> Result<(), NviError> {
+        let gpu_map = build_gpu_map(&app_state.gpu_infos);
+        let had_baseline = app_state.prev_cpu_total.is_some();
+
+        let procs: Vec<SystemProcess> = with_probe(|probe| {
+            // One pass: CPU deltas, memory, and the full process table. sysinfo
+            // computes cpu_usage internally across refreshes, so the first tick
+            // after startup reads zero (mirrors the unix baseline gate below).
+            // `everything()` also fetches per-core frequency (the CPUInfo
+            // panel's Freq field); `refresh_cpu_usage()` alone leaves it 0.
+            probe
+                .system
+                .refresh_cpu_specifics(CpuRefreshKind::everything());
+            probe.system.refresh_memory();
+            // remove_dead_processes = true: exited processes drop out of the
+            // table every tick, like the unix backend's fresh /proc scan —
+            // with false a dead process would keep its frozen last CPU% and
+            // pin the top of the tray for the rest of the session.
+            probe.system.refresh_processes_specifics(
+                ProcessesToUpdate::All,
+                true,
+                process_refresh_kind(),
+            );
+            // Populate the user table once per session so `enrich_processes`
+            // (called via `rebuild_process_tray` below) can resolve usernames.
+            probe.ensure_users();
+
+            app_state.cpu_stats = cpu_stats_from_system(&probe.system);
+            // PDH counters need two collection cycles before per-core usage is
+            // meaningful; the first tick can report 100% across the board. The
+            // unix backend shows 0.0% on its first tick (no baseline yet), so
+            // zero the Windows first tick too to keep the panels aligned.
+            if !had_baseline {
+                app_state.cpu_stats.per_core_usage = vec![0.0; app_state.cpu_stats.logical_cores];
+                app_state.cpu_stats.aggregate_usage = 0.0;
+            }
+
+            let mut procs: Vec<SystemProcess> = Vec::new();
+            for (pid, process) in probe.system.processes() {
+                let pid_i32 = pid.as_u32() as i32;
+                let (gpu_memory, gpu_index) = match gpu_map.get(&pid_i32) {
+                    Some(&(m, i)) => (Some(m), Some(i)),
+                    None => (None, None),
+                };
+                // sysinfo's Process::cpu_usage is top-style (100 = one saturated
+                // core, can exceed 100% on multi-core), matching the unix
+                // convention; no scaling applied.
+                procs.push(SystemProcess {
+                    pid: pid_i32,
+                    gpu_memory,
+                    gpu_index,
+                    username: String::new(),
+                    command: process.name().to_string_lossy().into_owned(),
+                    cpu_usage: process.cpu_usage(),
+                    // sysinfo >= 0.30 returns RSS in bytes (no page-size multiply).
+                    memory_usage: process.memory(),
+                    state: status_char(process.status()),
+                });
+            }
+            procs
+        });
+
+        // History gate: skip the first (zero-baseline) tick so the graph does
+        // not start with an artificial 0%. `prev_cpu_total` is reused as the
+        // "have we collected before" sentinel — its tick fields aren't read on
+        // Windows, only `is_some()` matters here.
+        if had_baseline {
+            app_state
+                .cpu_usage_history
+                .push(f64::from(app_state.cpu_stats.aggregate_usage).clamp(0.0, 100.0));
+            while app_state.cpu_usage_history.len() > HISTORY_CAP {
+                app_state.cpu_usage_history.remove(0);
+            }
+        }
+        app_state.prev_cpu_total = Some(KernelCpuSample::default());
+        app_state.prev_cpu_per_core = Vec::new();
+
+        app_state.process_scan = procs;
+        rebuild_process_tray(app_state);
+
+        Ok(())
+    }
+
+    /// Map a refreshed sysinfo `System` onto the platform-neutral `CpuStats`
+    /// panel. Load average is a Unix concept, so it is hard-zeroed on Windows
+    /// (the UI hides the field rather than approximating it). Extracted from
+    /// `collect_system_stats` so the Windows stat-mapping is unit-testable
+    /// without driving the full process-scan + username-resolution pipeline,
+    /// which needs the live Windows LSA backend.
+    fn cpu_stats_from_system(system: &sysinfo::System) -> CpuStats {
+        let cpus = system.cpus();
+        let logical_cores = cpus.len();
+        let model = cpus
+            .first()
+            .map(|c| c.brand().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "Unknown CPU".to_string());
+        let per_core_usage: Vec<f32> = cpus.iter().map(|c| c.cpu_usage()).collect();
+        let aggregate_usage = system.global_cpu_usage();
+        let frequency_mhz = if cpus.is_empty() {
+            0.0
+        } else {
+            cpus.iter().map(|c| c.frequency() as f64).sum::<f64>() / cpus.len() as f64
+        };
+        CpuStats {
+            model,
+            logical_cores,
+            per_core_usage,
+            aggregate_usage,
+            frequency_mhz,
+            load_avg: (0.0, 0.0, 0.0),
+            mem_total: system.total_memory(),
+            mem_used: system.used_memory(),
+            swap_total: system.total_swap(),
+            swap_used: system.used_swap(),
+        }
+    }
+
+    pub(super) fn enrich_processes(
+        procs: &mut [SystemProcess],
+        uid_cache: &mut HashMap<u32, String>,
+    ) {
+        // sysinfo resolves username/cmdline from its own cached process table,
+        // so the unix uid_cache isn't needed here. The parameter is kept in the
+        // signature so `rebuild_process_tray` stays platform-neutral.
+        let _ = uid_cache;
+        with_probe(|probe| {
+            for proc_row in procs.iter_mut() {
+                let pid = sysinfo::Pid::from_u32(proc_row.pid as u32);
+                match probe.system.process(pid) {
+                    Some(process) => {
+                        let joined = process
+                            .cmd()
+                            .iter()
+                            .map(|s| s.to_string_lossy().into_owned())
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                        if !joined.is_empty() {
+                            proc_row.command = joined;
+                        } else if proc_row.command.is_empty() {
+                            proc_row.command = format!("[{}]", proc_row.pid);
+                        }
+
+                        let username = process
+                            .user_id()
+                            .and_then(|uid| probe.users.get_user_by_id(uid))
+                            .map(|u| u.name().to_string())
+                            .unwrap_or_else(|| "?".to_string());
+                        proc_row.username = username;
+                    }
+                    None => {
+                        if proc_row.command.is_empty() {
+                            proc_row.command = format!("[{}]", proc_row.pid);
+                        }
+                        proc_row.username = "?".to_string();
+                    }
+                }
+            }
+        });
+    }
+
+    /// Map a sysinfo `ProcessStatus` to the single-char state column used by the
+    /// tray. Windows has no `/proc` state char, so we collapse to the closest
+    /// unix equivalent; anything unmapped becomes `'?'`.
+    fn status_char(status: ProcessStatus) -> char {
+        match status {
+            ProcessStatus::Run => 'R',
+            ProcessStatus::Sleep => 'S',
+            ProcessStatus::Stop => 'T',
+            ProcessStatus::Zombie => 'Z',
+            _ => '?',
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::status_char;
+        use sysinfo::ProcessStatus;
+
+        #[test]
+        fn test_status_char_mapping() {
+            assert_eq!(status_char(ProcessStatus::Run), 'R');
+            assert_eq!(status_char(ProcessStatus::Sleep), 'S');
+            assert_eq!(status_char(ProcessStatus::Stop), 'T');
+            assert_eq!(status_char(ProcessStatus::Zombie), 'Z');
+            // Everything else collapses to the unknown sentinel.
+            assert_eq!(status_char(ProcessStatus::Idle), '?');
+            assert_eq!(status_char(ProcessStatus::Dead), '?');
+            assert_eq!(status_char(ProcessStatus::Unknown(0)), '?');
+        }
+
+        #[test]
+        fn test_cpu_stats_windows_no_load_avg() {
+            // Drives the real sysinfo CPU/memory backend (the part of
+            // `collect_system_stats` that this assertion is about) without the
+            // full process-scan + username-resolution pipeline, which needs the
+            // live Windows LSA backend. Load average is a Unix concept and must
+            // be hard-zeroed on Windows; total memory must be non-zero on any
+            // real (or Wine-emulated) Windows host.
+            use super::cpu_stats_from_system;
+            use sysinfo::System;
+
+            let mut system = System::new();
+            system.refresh_cpu_usage();
+            system.refresh_memory();
+            let stats = cpu_stats_from_system(&system);
+            assert_eq!(stats.load_avg, (0.0, 0.0, 0.0));
+            assert!(stats.mem_total > 0);
+        }
+    }
+}
+
+pub use imp::*;
 
 #[cfg(test)]
 mod tests {

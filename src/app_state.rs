@@ -5,8 +5,8 @@ use crate::gpu::info::{GpuInfo, collect_gpu_info};
 use crate::influx_local::{InfluxDBConfig, TempInfluxConfig};
 use crate::keybinds::PendingOp;
 use crate::system_monitor::{
-    collect_system_stats, rebuild_process_tray, system_metrics_write_query, CpuStats,
-    KernelCpuSample, SortMode, SystemProcess,
+    CpuStats, KernelCpuSample, SortMode, SystemProcess, collect_system_stats, rebuild_process_tray,
+    system_metrics_write_query,
 };
 use crate::utils::system::CpuSample;
 use nvml::Nvml;
@@ -48,6 +48,11 @@ pub struct AppState {
     pub cpu_usage_history: Vec<f64>,
     pub prev_cpu_total: Option<KernelCpuSample>,
     pub prev_cpu_per_core: Vec<KernelCpuSample>,
+    /// Prior per-process cumulative CPU times (`/proc`-style) for top-style
+    /// %CPU deltas in the `--cpu` process scan. Unix-only: the Windows
+    /// backend gets process deltas from sysinfo directly, so nothing reads
+    /// this map there.
+    #[cfg_attr(windows, allow(dead_code))]
     pub prev_proc_times: HashMap<i32, u64>,
     pub uid_cache: HashMap<u32, String>,
 }
@@ -183,9 +188,7 @@ impl AppState {
                 self.last_update = Some(std::time::Instant::now());
                 true
             }
-            Some(t)
-                if t.elapsed() >= std::time::Duration::from_millis(interval_ms) =>
-            {
+            Some(t) if t.elapsed() >= std::time::Duration::from_millis(interval_ms) => {
                 self.last_update = Some(std::time::Instant::now());
                 true
             }
@@ -214,10 +217,10 @@ impl AppState {
     ) -> Result<()> {
         self.gpu_infos = collect_gpu_info(nvml, self)?;
 
-        if self.cpu_monitoring {
-            if let Err(e) = collect_system_stats(self) {
-                self.error_message = Some(format!("System info error: {e}"));
-            }
+        if self.cpu_monitoring
+            && let Err(e) = collect_system_stats(self)
+        {
+            self.error_message = Some(format!("System info error: {e}"));
         }
 
         self.clamp_selection();
@@ -298,8 +301,10 @@ mod tests {
 
     #[test]
     fn test_app_state_initialization() {
-        let mut state = AppState::default();
-        state.use_tabbed_graphs = true;
+        let state = AppState {
+            use_tabbed_graphs: true,
+            ..Default::default()
+        };
 
         assert_eq!(state.selected_process, 0);
         assert_eq!(state.selected_gpu_tab, 0);
@@ -332,8 +337,10 @@ mod tests {
 
     #[test]
     fn test_total_processes_cpu_mode_uses_system_list() {
-        let mut state = AppState::default();
-        state.cpu_monitoring = true;
+        let mut state = AppState {
+            cpu_monitoring: true,
+            ..Default::default()
+        };
         state.gpu_infos.push(GpuInfo {
             index: 0,
             name: "G".into(),
@@ -372,10 +379,7 @@ mod tests {
             power_usage: 0,
             power_limit: 0,
             clock_freq: 0,
-            processes: vec![
-                gpu_proc(10, 100, "small"),
-                gpu_proc(20, 900, "big"),
-            ],
+            processes: vec![gpu_proc(10, 100, "small"), gpu_proc(20, 900, "big")],
         });
         // Display order is GPU-memory desc → big first.
         state.selected_process = 0;
@@ -386,8 +390,10 @@ mod tests {
 
     #[test]
     fn test_selected_kill_target_cpu_mode() {
-        let mut state = AppState::default();
-        state.cpu_monitoring = true;
+        let mut state = AppState {
+            cpu_monitoring: true,
+            ..Default::default()
+        };
         state.processes.push(SystemProcess {
             pid: 7,
             gpu_memory: None,
@@ -457,8 +463,8 @@ mod tests {
         let state = AppState::default();
         // Should not be able to select any process when there are no GPUs
         let total_processes = state.total_process_count();
-        assert!(!(0 < total_processes));
-        assert!(!(1 < total_processes));
+        assert!(total_processes == 0);
+        assert!(total_processes <= 1);
     }
 
     #[test]

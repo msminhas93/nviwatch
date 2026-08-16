@@ -52,6 +52,7 @@ impl From<std::io::Error> for NviError {
     }
 }
 
+#[cfg(unix)]
 impl From<nix::errno::Errno> for NviError {
     fn from(e: nix::errno::Errno) -> Self {
         Self::Process(e.to_string())

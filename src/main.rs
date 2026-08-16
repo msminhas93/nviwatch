@@ -205,7 +205,7 @@ fn main() -> Result<()> {
                 }
             }
 
-            if let Some(nav) = KeybindAggregate::try_from(&key).ok() {
+            if let Ok(nav) = KeybindAggregate::try_from(&key) {
                 app_state.pending_op = PendingOp::None;
                 match nav {
                     KeybindAggregate::Up => {

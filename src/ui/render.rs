@@ -38,10 +38,7 @@ fn render_terminal_too_small(f: &mut Frame, area: Rect, min_w: u16, required_h: 
             area.width, area.height
         ),
         (true, false) => format!("Need at least {min_w} columns (now {})", area.width),
-        (false, true) => format!(
-            "Need at least {required_h} rows (now {})",
-            area.height
-        ),
+        (false, true) => format!("Need at least {required_h} rows (now {})", area.height),
         (false, false) => unreachable!(),
     };
     let message = format!("Terminal too small\n{size_hint}\n\nResize to continue");
@@ -362,8 +359,12 @@ pub fn render_process_list(f: &mut Frame, area: Rect, app_state: &AppState) {
             ];
 
             if index == app_state.selected_process {
-                Row::new(cells.into_iter().map(|text| Cell::from(text).style(selected_style)))
-                    .style(selected_style)
+                Row::new(
+                    cells
+                        .into_iter()
+                        .map(|text| Cell::from(text).style(selected_style)),
+                )
+                .style(selected_style)
             } else {
                 let [gpu, pid, gpu_mem, cpu_pct, mem, user, cmd] = cells;
                 Row::new(vec![
@@ -487,8 +488,12 @@ pub fn render_system_process_list(f: &mut Frame, area: Rect, app_state: &AppStat
             ];
 
             if index == app_state.selected_process {
-                Row::new(cells.into_iter().map(|text| Cell::from(text).style(selected_style)))
-                    .style(selected_style)
+                Row::new(
+                    cells
+                        .into_iter()
+                        .map(|text| Cell::from(text).style(selected_style)),
+                )
+                .style(selected_style)
             } else {
                 let [gpu, pid, gpu_mem, cpu, mem, user, state, cmd] = cells;
                 Row::new(vec![
@@ -545,7 +550,11 @@ pub fn render_system_process_list(f: &mut Frame, area: Rect, app_state: &AppStat
                 .add_modifier(Modifier::BOLD),
         ),
         Cell::from("User").style(Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
-        Cell::from("S").style(Style::default().fg(Color::Gray).add_modifier(Modifier::BOLD)),
+        Cell::from("S").style(
+            Style::default()
+                .fg(Color::Gray)
+                .add_modifier(Modifier::BOLD),
+        ),
         Cell::from("Command").style(Style::default().add_modifier(Modifier::BOLD)),
     ]))
     .column_spacing(1);

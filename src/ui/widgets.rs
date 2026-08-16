@@ -1,6 +1,6 @@
 use crate::app_state::AppState;
 use crate::gpu::info::GpuInfo;
-use crate::system_monitor::{meter_bar, meter_cell_width, CpuStats};
+use crate::system_monitor::{CpuStats, meter_bar, meter_cell_width};
 use crate::utils::format_memory_size;
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -113,7 +113,10 @@ pub fn render_help(f: &mut Frame, area: Rect, scroll: u16, cpu_monitoring: bool)
     let scroll = scroll.min(max_scroll);
 
     let title = if max_scroll > 0 {
-        format!(" Help  ·  ↑↓ scroll ({}/{})  ·  Esc/? close ", scroll, max_scroll)
+        format!(
+            " Help  ·  ↑↓ scroll ({}/{})  ·  Esc/? close ",
+            scroll, max_scroll
+        )
     } else {
         " Help  ·  Esc/? close ".to_string()
     };
@@ -295,7 +298,7 @@ pub fn render_cpu_info(f: &mut Frame, area: Rect, cpu: &CpuStats) {
         "Swap: none".to_string()
     };
 
-    let lines = vec![
+    let mut lines = vec![
         Line::from(Span::styled(
             model,
             Style::default()
@@ -306,13 +309,22 @@ pub fn render_cpu_info(f: &mut Frame, area: Rect, cpu: &CpuStats) {
             "Cores: {}   Freq: {:.0} MHz",
             cpu.logical_cores, cpu.frequency_mhz
         )),
-        Line::from(format!(
-            "Load:  {:.2}  {:.2}  {:.2}",
-            cpu.load_avg.0, cpu.load_avg.1, cpu.load_avg.2
-        )),
-        Line::from(Span::styled(mem_line, Style::default().fg(Color::Blue))),
-        Line::from(Span::styled(swap_line, Style::default().fg(Color::Cyan))),
     ];
+    // Load average is a Unix-only concept; sysinfo returns zeros on Windows, so
+    // hide the line there rather than display three meaningless "0.00" values.
+    #[cfg(unix)]
+    lines.push(Line::from(format!(
+        "Load:  {:.2}  {:.2}  {:.2}",
+        cpu.load_avg.0, cpu.load_avg.1, cpu.load_avg.2
+    )));
+    lines.push(Line::from(Span::styled(
+        mem_line,
+        Style::default().fg(Color::Blue),
+    )));
+    lines.push(Line::from(Span::styled(
+        swap_line,
+        Style::default().fg(Color::Cyan),
+    )));
     f.render_widget(Paragraph::new(lines), inner);
 }
 
@@ -354,7 +366,7 @@ fn render_cpu_meters(f: &mut Frame, area: Rect, cpu: &CpuStats) {
     }
 
     let cols = (inner.width as usize / meter_cell_width()).max(1);
-    let rows_n = (cores + cols - 1) / cols;
+    let rows_n = cores.div_ceil(cols);
 
     let mut lines: Vec<Line> = Vec::with_capacity(rows_n);
     for r in 0..rows_n {
@@ -400,11 +412,7 @@ fn render_cpu_graph(f: &mut Frame, area: Rect, app_state: &AppState) {
         .data(&data);
 
     let chart = Chart::new(vec![dataset])
-        .block(
-            Block::default()
-                .title("CPU History")
-                .borders(Borders::ALL),
-        )
+        .block(Block::default().title("CPU History").borders(Borders::ALL))
         .x_axis(
             Axis::default()
                 .style(Style::default().fg(Color::Gray))

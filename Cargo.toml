@@ -16,11 +16,18 @@ categories = ["command-line-utilities", "visualization", "hardware-support"]
 [dependencies]
 clap = "4.6.5"
 crossterm = "0.29.0"
-nix = { version = "0.31.3", features = ["process", "signal", "user"] }
 nvml = { version = "0.12.1", package = "nvml-wrapper" }
 prettytable-rs = "0.10.0"
-procfs = "0.18.0"
 ratatui = "0.30.2"
 textwrap = "0.16.2"
 influxdb = { version = "0.8.0", features = ["derive"] }
 tokio = { version = "1.53.1", features = ["full"] }
+
+# Linux-only: /proc parsing (procfs) and POSIX wrappers (nix).
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.31.3", features = ["process", "signal", "user"] }
+procfs = "0.18.0"
+
+# Windows-only: cross-platform system probe backing the process/CPU backend.
+[target.'cfg(windows)'.dependencies]
+sysinfo = "0.39"
