@@ -102,7 +102,7 @@ mod imp {
     use crate::error::NviError;
     use crate::gpu::GpuProcessInfo;
     use std::cell::RefCell;
-    use sysinfo::{Pid, ProcessesToUpdate, Signal, System, Users};
+    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, Signal, System, UpdateKind, Users};
 
     /// Shared sysinfo probe: `System` for process/CPU/memory data, `Users` for
     /// username lookup. Held in a `thread_local!` so the public signatures of
@@ -158,6 +158,22 @@ mod imp {
         PROBE.with_borrow_mut(f)
     }
 
+    /// Refresh kind shared by the GPU-process and `--cpu` backends. The
+    /// default `refresh_processes` kind omits `cmd` and `user`, and on
+    /// Windows `Process::user_id()` is only populated when the refresh kind
+    /// asks for it — without this the command and username columns stay
+    /// empty. `OnlyIfNotSet` matches `ProcessRefreshKind::everything()`'s
+    /// convention: fetched once per process lifetime rather than re-read
+    /// every tick. CPU and memory feed the %CPU and Mem columns; disk usage
+    /// and exe are not read anywhere.
+    pub(crate) fn process_refresh_kind() -> ProcessRefreshKind {
+        ProcessRefreshKind::nothing()
+            .with_cpu()
+            .with_memory()
+            .with_cmd(UpdateKind::OnlyIfNotSet)
+            .with_user(UpdateKind::OnlyIfNotSet)
+    }
+
     pub fn get_process_info(
         pid: u32,
         used_gpu_memory: u64,
@@ -167,9 +183,11 @@ mod imp {
             let sid = Pid::from_u32(pid);
             // Refresh only this PID: avoids a full process enumeration per GPU
             // process per tick (the perf killer called out in the spec).
-            probe
-                .system
-                .refresh_processes(ProcessesToUpdate::Some(&[sid]), false);
+            probe.system.refresh_processes_specifics(
+                ProcessesToUpdate::Some(&[sid]),
+                false,
+                process_refresh_kind(),
+            );
             // Populate the user table once so username lookup below can resolve.
             probe.ensure_users();
             let process = probe.system.process(sid)?;

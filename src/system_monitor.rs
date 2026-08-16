@@ -369,9 +369,9 @@ mod imp {
     };
     use crate::app_state::AppState;
     use crate::error::NviError;
-    use crate::utils::system::with_probe;
+    use crate::utils::system::{process_refresh_kind, with_probe};
     use std::collections::HashMap;
-    use sysinfo::{ProcessStatus, ProcessesToUpdate};
+    use sysinfo::{CpuRefreshKind, ProcessStatus, ProcessesToUpdate};
 
     /// Collect CPU stats, system memory, and the top-N process list.
     pub fn collect_system_stats(app_state: &mut AppState) -> Result<(), NviError> {
@@ -382,16 +382,30 @@ mod imp {
             // One pass: CPU deltas, memory, and the full process table. sysinfo
             // computes cpu_usage internally across refreshes, so the first tick
             // after startup reads zero (mirrors the unix baseline gate below).
-            probe.system.refresh_cpu_usage();
-            probe.system.refresh_memory();
+            // `everything()` also fetches per-core frequency (the CPUInfo
+            // panel's Freq field); `refresh_cpu_usage()` alone leaves it 0.
             probe
                 .system
-                .refresh_processes(ProcessesToUpdate::All, false);
+                .refresh_cpu_specifics(CpuRefreshKind::everything());
+            probe.system.refresh_memory();
+            probe.system.refresh_processes_specifics(
+                ProcessesToUpdate::All,
+                false,
+                process_refresh_kind(),
+            );
             // Populate the user table once per session so `enrich_processes`
             // (called via `rebuild_process_tray` below) can resolve usernames.
             probe.ensure_users();
 
             app_state.cpu_stats = cpu_stats_from_system(&probe.system);
+            // PDH counters need two collection cycles before per-core usage is
+            // meaningful; the first tick can report 100% across the board. The
+            // unix backend shows 0.0% on its first tick (no baseline yet), so
+            // zero the Windows first tick too to keep the panels aligned.
+            if !had_baseline {
+                app_state.cpu_stats.per_core_usage = vec![0.0; app_state.cpu_stats.logical_cores];
+                app_state.cpu_stats.aggregate_usage = 0.0;
+            }
 
             let mut procs: Vec<SystemProcess> = Vec::new();
             for (pid, process) in probe.system.processes() {
