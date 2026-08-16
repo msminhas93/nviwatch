@@ -8,6 +8,10 @@ use std::time::Instant;
 /// The struct's public contract — a `u64` carried between ticks with a timestamp —
 /// is unchanged, and callers (`gpu/info.rs`) treat it opaquely.
 #[derive(Clone, Copy, Debug)]
+// Only the unix backend reads the fields back for delta math; the Windows
+// backend constructs samples to honour the shared contract but reads nothing
+// from them (sysinfo computes the delta internally).
+#[cfg_attr(windows, allow(dead_code))]
 pub struct CpuSample {
     pub total_ticks: u64,
     pub at: Instant,

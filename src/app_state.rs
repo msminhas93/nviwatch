@@ -48,6 +48,11 @@ pub struct AppState {
     pub cpu_usage_history: Vec<f64>,
     pub prev_cpu_total: Option<KernelCpuSample>,
     pub prev_cpu_per_core: Vec<KernelCpuSample>,
+    /// Prior per-process cumulative CPU times (`/proc`-style) for top-style
+    /// %CPU deltas in the `--cpu` process scan. Unix-only: the Windows
+    /// backend gets process deltas from sysinfo directly, so nothing reads
+    /// this map there.
+    #[cfg_attr(windows, allow(dead_code))]
     pub prev_proc_times: HashMap<i32, u64>,
     pub uid_cache: HashMap<u32, String>,
 }

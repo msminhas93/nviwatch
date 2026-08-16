@@ -127,6 +127,10 @@ pub fn system_metrics_write_query(cpu: &CpuStats) -> influxdb::WriteQuery {
 }
 
 /// Percentage busy between two cumulative samples.
+// Only the unix backend calls this from non-test code (the Windows backend
+// has no cumulative kernel counters to feed it); the platform-neutral tests
+// below exercise it on both platforms.
+#[cfg_attr(windows, allow(dead_code))]
 fn pct(prev: &KernelCpuSample, cur: &KernelCpuSample) -> f32 {
     let dt = cur.total.saturating_sub(prev.total);
     let di = cur.idle.saturating_sub(prev.idle).min(dt);
