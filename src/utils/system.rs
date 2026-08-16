@@ -102,7 +102,7 @@ mod imp {
     use crate::error::NviError;
     use crate::gpu::GpuProcessInfo;
     use std::cell::RefCell;
-    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, Signal, System, UpdateKind, Users};
+    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind, Users};
 
     /// Shared sysinfo probe: `System` for process/CPU/memory data, `Users` for
     /// username lookup. Held in a `thread_local!` so the public signatures of
@@ -183,9 +183,14 @@ mod imp {
             let sid = Pid::from_u32(pid);
             // Refresh only this PID: avoids a full process enumeration per GPU
             // process per tick (the perf killer called out in the spec).
+            // remove_dead_processes = true: a pid that died since the last
+            // NVML query is dropped here, so the row disappears silently
+            // instead of showing frozen numbers, and a reused pid gets a
+            // fresh entry (with fresh cmd/user reads) rather than the dead
+            // predecessor's.
             probe.system.refresh_processes_specifics(
                 ProcessesToUpdate::Some(&[sid]),
-                false,
+                true,
                 process_refresh_kind(),
             );
             // Populate the user table once so username lookup below can resolve.
@@ -252,33 +257,34 @@ mod imp {
     }
 
     pub fn kill_selected_process(pid: u32, command: &str) -> Result<(), NviError> {
-        with_probe(|probe| {
-            let sid = Pid::from_u32(pid);
-            probe
-                .system
-                .refresh_processes(ProcessesToUpdate::Some(&[sid]), false);
-            let Some(process) = probe.system.process(sid) else {
-                return Err(NviError::Process(format!(
-                    "Failed to terminate process {pid} ({command}): no such process"
-                )));
-            };
-            // Try a graceful terminate first; sysinfo returns `None` when the
-            // signal is unsupported on this platform (Windows supports few), in
-            // which case fall back to the always-available force-kill. sysinfo
-            // exposes only a `bool`, so — unlike the unix EPERM branch — we cannot
-            // distinguish permission denial from other failures; a failed send is
-            // reported with the generic message used by the unix non-EPERM path.
-            let sent = process
-                .kill_with(Signal::Term)
-                .unwrap_or_else(|| process.kill());
-            if sent {
-                Ok(())
-            } else {
-                Err(NviError::Process(format!(
-                    "Failed to terminate process {pid} ({command})"
-                )))
-            }
-        })
+        // sysinfo's Process::kill() shells out to `taskkill /PID <pid> /F` as
+        // well but returns only a bool, which cannot distinguish permission
+        // denial from other failures. Calling taskkill directly keeps the
+        // unix branch's message set via its exit codes: 0 success, 1 access
+        // denied, 128 no such process. stderr text is deliberately not
+        // matched — it is localized on non-English Windows, the exit codes
+        // are not. Output is captured (not inherited) so taskkill's own
+        // ERROR/SUCCESS lines cannot corrupt the TUI.
+        let output = std::process::Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/F"])
+            .output()
+            .map_err(|e| {
+                NviError::Process(format!(
+                    "Failed to terminate process {pid} ({command}): {e}"
+                ))
+            })?;
+        match output.status.code() {
+            Some(0) => Ok(()),
+            Some(1) => Err(NviError::Process(format!(
+                "Permission denied to terminate process {pid} ({command})"
+            ))),
+            Some(128) => Err(NviError::Process(format!(
+                "Failed to terminate process {pid} ({command}): no such process"
+            ))),
+            _ => Err(NviError::Process(format!(
+                "Failed to terminate process {pid} ({command})"
+            ))),
+        }
     }
 }
 

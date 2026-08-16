@@ -388,9 +388,13 @@ mod imp {
                 .system
                 .refresh_cpu_specifics(CpuRefreshKind::everything());
             probe.system.refresh_memory();
+            // remove_dead_processes = true: exited processes drop out of the
+            // table every tick, like the unix backend's fresh /proc scan —
+            // with false a dead process would keep its frozen last CPU% and
+            // pin the top of the tray for the rest of the session.
             probe.system.refresh_processes_specifics(
                 ProcessesToUpdate::All,
-                false,
+                true,
                 process_refresh_kind(),
             );
             // Populate the user table once per session so `enrich_processes`
