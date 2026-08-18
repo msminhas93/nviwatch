@@ -3,6 +3,7 @@
 use crate::app_state::AppState;
 use crate::error::NviError;
 use crate::gpu::info::GpuInfo;
+use crate::utils::system::instant_process_cpu_pct_from_system;
 use nix::unistd::{Uid, User};
 use procfs::prelude::*;
 use procfs::process::{all_processes, Process};
@@ -184,17 +185,11 @@ pub fn collect_system_stats(app_state: &mut AppState) -> Result<(), NviError> {
             let ticks = stat.utime + stat.stime;
             new_prev.insert(pid, ticks);
 
-            let cpu_usage = if total_delta > 0 {
-                match app_state.prev_proc_times.get(&pid) {
-                    Some(&prev) => {
-                        (ticks.saturating_sub(prev) as f64 / total_delta as f64
-                            * logical_cores as f64
-                            * 100.0) as f32
-                    }
-                    None => 0.0,
+            let cpu_usage = match app_state.prev_proc_times.get(&pid) {
+                Some(&prev) => {
+                    instant_process_cpu_pct_from_system(ticks.saturating_sub(prev), total_delta)
                 }
-            } else {
-                0.0
+                None => 0.0,
             };
 
             let (gpu_memory, gpu_index) = match gpu_map.get(&pid) {
@@ -391,6 +386,17 @@ mod tests {
             idle: 200,
         };
         assert_eq!(pct(&prev, &cur), 50.0);
+    }
+
+    #[test]
+    fn test_process_cpu_seven_of_eight_cores_is_not_700() {
+        // Old main formula: proc_delta / system_delta * ncpus * 100 = 700.
+        let pct = instant_process_cpu_pct_from_system(700, 800);
+        assert!(
+            (pct - 87.5).abs() < 0.01,
+            "expected 87.5% of machine, got {pct}"
+        );
+        assert!(pct <= 100.0);
     }
 
     #[test]
